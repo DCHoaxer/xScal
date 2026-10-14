@@ -7,17 +7,19 @@
 #include "scaleform/value.hpp"
 
 #include <bit>
+#include <condition_variable>
 #include <cstring>
 #include <limits>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 
 namespace sf {
 namespace {
 
-std::shared_mutex callbackRouterMutex;
+std::mutex callbackRouterMutex;
+std::condition_variable callbackRouterIdle;
 ScaleformCallbackRouter* activeCallbackRouter{};
+unsigned callbackDispatchInFlight{};
 thread_local std::string returnStringBuffer;
 
 // Encodes a scalar or string payload as the GFx value written to a native call's result.
@@ -193,7 +195,7 @@ NativeFunctionHandler::NativeFunctionHandler() noexcept
 
 bool PublishNativeCallbackRouter(
     ScaleformCallbackRouter& callbackRouter) noexcept {
-    std::unique_lock lock{callbackRouterMutex};
+    std::lock_guard lock{callbackRouterMutex};
     if (activeCallbackRouter != nullptr &&
         activeCallbackRouter != &callbackRouter) {
         return false;
@@ -208,6 +210,8 @@ void ClearNativeCallbackRouter(
     if (activeCallbackRouter == &callbackRouter) {
         activeCallbackRouter = nullptr;
     }
+    // Must not be called from inside a dispatch on this same thread.
+    callbackRouterIdle.wait(lock, [] { return callbackDispatchInFlight == 0; });
 }
 
 bool CommitScaleformResult(
@@ -281,9 +285,31 @@ void __fastcall NativeFunctionHandler::Invoke(
         params->thisObject,
         params->argumentFrame,
     };
-    std::shared_lock routerLock{callbackRouterMutex};
-    if (activeCallbackRouter == nullptr ||
-        !activeCallbackRouter->Dispatch(callbackName, call)) {
+    ScaleformCallbackRouter* router{};
+    {
+        std::lock_guard lock{callbackRouterMutex};
+        router = activeCallbackRouter;
+        if (router == nullptr) {
+            DiagnosticLogFormat(
+                "Scaleform call: no active router (name=%.*s, arguments=%zu)",
+                static_cast<int>(callbackName.size()),
+                callbackName.data(),
+                params->argumentCount);
+            return;
+        }
+        ++callbackDispatchInFlight;
+    }
+
+    const bool dispatched = router->Dispatch(callbackName, call);
+
+    {
+        std::lock_guard lock{callbackRouterMutex};
+        if (--callbackDispatchInFlight == 0) {
+            callbackRouterIdle.notify_all();
+        }
+    }
+
+    if (!dispatched) {
         DiagnosticLogFormat(
             "Scaleform call: dispatch failed (name=%.*s, arguments=%zu)",
             static_cast<int>(callbackName.size()),
