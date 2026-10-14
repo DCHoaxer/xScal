@@ -40,7 +40,7 @@ enum class FileCommandSubmitStatus : std::uint8_t {
 class FileCommandService final {
 public:
     static constexpr std::size_t kMaximumQueuedCommands = 64;
-    static constexpr std::size_t kMaximumPayloadBytes = 1024U * 1024U;
+    static constexpr std::size_t kMaximumPayloadBytes = 5U * 1024U * 1024U; // Increase to 5MB.
     static constexpr std::size_t kMaximumQueuedPayloadBytes =
         4U * 1024U * 1024U;
 
