@@ -57,20 +57,4 @@ bool IsReadableRange(VirtualQueryFn virtualQuery, const void* address, std::size
     return true;
 }
 
-bool GetReadableSpanEnd(VirtualQueryFn virtualQuery, const char* current, std::size_t remaining, const char*& spanEnd) noexcept {
-    spanEnd = nullptr;
-    if (virtualQuery == nullptr || current == nullptr || remaining == 0) return false;
-    MEMORY_BASIC_INFORMATION region{};
-    if (virtualQuery(current, &region, sizeof(region)) == 0 || region.State != MEM_COMMIT ||
-        !IsReadableProtection(region.Protect) || !RegionContains(region, current, 1)) return false;
-    const auto start = reinterpret_cast<std::uintptr_t>(current);
-    const auto base = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
-    if (region.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - base ||
-        remaining > (std::numeric_limits<std::uintptr_t>::max)() - start) return false;
-    const auto regionEnd = base + region.RegionSize;
-    const auto requestedEnd = start + remaining;
-    spanEnd = reinterpret_cast<const char*>(std::min(regionEnd, requestedEnd));
-    return spanEnd > current;
-}
-
 }

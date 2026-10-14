@@ -40,6 +40,11 @@ enum class VtableHookStatus {
     InvalidPlatform,
     RuntimeVersionUnavailable,
     RuntimeVersionMismatch,
+    AddressLibraryMissing,
+    AddressLibraryRestartRequired,
+    AddressLibraryRequiresNewerXScal,
+    AddressLibraryInvalid,
+    AddressLibraryIncomplete,
     AddressOverflow,
     SlotUnaligned,
     SlotNotReadable,
@@ -63,6 +68,10 @@ public:
         const TargetProfile& profile,
         std::uintptr_t moduleBase,
         MovieRootGetVariable hook) noexcept;
+    [[nodiscard]] VtableHookStatus InstallSlot(
+        std::uintptr_t slotOffset,
+        std::uintptr_t moduleBase,
+        void* hook) noexcept;
     [[nodiscard]] VtableHookStatus Restore() noexcept;
 
     [[nodiscard]] bool IsActive() const noexcept;
@@ -88,7 +97,7 @@ private:
     mutable std::mutex mutex_;
     State state_{State::Inactive};
     void** slot_{};
-    MovieRootGetVariable original_{};
+    void* original_{};
     void* hook_{};
     DWORD recoveryOldProtection_{};
     VtableHookStatus recoveryResult_{VtableHookStatus::NotActive};

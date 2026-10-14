@@ -5,12 +5,19 @@ Proof of concept.
 
 ## Source layout
 
-- `src/api`: Callback registry and AS3 callbacks
-- `src/config`: EXE profiles and updateable RVAs
+- `src/address`: Address library loading
+- `src/api`: AS3 callbacks, movie interface, mod storage and file commands
+- `src/chat`: Chat session and relay connection
+- `src/common`: Small shared helpers (JSON, ASCII case)
+- `src/config`: Config, EXE profiles and updateable RVAs
+- `src/datamanager`: Pip-Boy effect and time data providers
 - `src/hook`: Vtable stuf MovieRoot routing, and other stuff... and things
+- `src/input`: XInput hook, input state and gamepad suppression
+- `src/modules`: Built-in core and priority modules
 - `src/platform`: Windows memory validation and diagnostics (i'm not even using windows)
+- `src/plugins`: Plugin loading and signature checks
 - `src/runtime`: Process initialization and shutdown, mostly.
-- `src/scaleform`: Handler, ownership, and "bridge" construction
+- `src/scaleform`: Handler, values, and bridge attachment
 
 ## ASM??
 Yes, this extenders implements runtime forwarder. 

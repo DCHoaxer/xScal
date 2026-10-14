@@ -1,6 +1,9 @@
 #include "platform/diagnostics.hpp"
 
+#include "api/file_command_service.hpp"
+
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -9,9 +12,11 @@ namespace sf {
 namespace {
 
 HMODULE diagnosticModule = nullptr;
+std::array<wchar_t, 32768> diagnosticPath{};
 SRWLOCK diagnosticLock = SRWLOCK_INIT;
 ULONGLONG diagnosticBaselineTick{};
 ULONGLONG diagnosticBaselineElapsedMs{};
+std::atomic<FileCommandService*> diagnosticFileService{};
 
 bool BuildLogPath(std::array<wchar_t, 32768>& path) noexcept {
     if (diagnosticModule == nullptr) {
@@ -39,6 +44,10 @@ bool BuildLogPath(std::array<wchar_t, 32768>& path) noexcept {
 
 void SetDiagnosticModule(HMODULE module) noexcept {
     diagnosticModule = module;
+    diagnosticPath.fill(L'\0');
+    if (!BuildLogPath(diagnosticPath)) {
+        diagnosticPath.fill(L'\0');
+    }
     diagnosticBaselineTick = ::GetTickCount64();
     diagnosticBaselineElapsedMs = 0;
 
@@ -67,9 +76,21 @@ void SetDiagnosticModule(HMODULE module) noexcept {
     }
 }
 
+void SetDiagnosticFileService(FileCommandService* service) noexcept {
+    diagnosticFileService.store(service, std::memory_order_release);
+}
+
+void ClearDiagnosticFileService(FileCommandService* service) noexcept {
+    FileCommandService* expected = service;
+    (void)diagnosticFileService.compare_exchange_strong(
+        expected,
+        nullptr,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire);
+}
+
 void ClearDiagnosticLog() noexcept {
-    std::array<wchar_t, 32768> path{};
-    if (!BuildLogPath(path)) {
+    if (diagnosticPath[0] == L'\0') {
         return;
     }
 
@@ -77,7 +98,7 @@ void ClearDiagnosticLog() noexcept {
         return;
     }
     HANDLE file = ::CreateFileW(
-        path.data(),
+        diagnosticPath.data(),
         GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -90,13 +111,53 @@ void ClearDiagnosticLog() noexcept {
     ::ReleaseSRWLockExclusive(&diagnosticLock);
 }
 
-void DiagnosticLog(const char* message) noexcept {
-    if (message == nullptr) {
+namespace {
+
+void AppendDiagnosticLineToFile(
+    std::string_view line,
+    bool waitForLock) noexcept {
+    if (line.empty() || diagnosticPath[0] == L'\0') {
         return;
     }
 
-    std::array<wchar_t, 32768> path{};
-    if (!BuildLogPath(path)) {
+    if (waitForLock) {
+        ::AcquireSRWLockExclusive(&diagnosticLock);
+    } else if (::TryAcquireSRWLockExclusive(&diagnosticLock) == FALSE) {
+        return;
+    }
+    HANDLE file = ::CreateFileW(
+        diagnosticPath.data(),
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        DWORD written{};
+        (void)::WriteFile(
+            file,
+            line.data(),
+            static_cast<DWORD>(line.size()),
+            &written,
+            nullptr);
+        (void)::CloseHandle(file);
+    }
+    ::ReleaseSRWLockExclusive(&diagnosticLock);
+}
+
+}
+
+void WriteDiagnosticLineToFile(std::string_view line) noexcept {
+    AppendDiagnosticLineToFile(line, false);
+}
+
+namespace {
+
+// Before the file service is attached, non-immediate lines wait for the log
+// lock. Dropping them when the lock is busy would lose startup messages.
+void WriteDiagnosticMessage(const char* message, bool immediate) noexcept {
+    if (message == nullptr || diagnosticPath[0] == L'\0') {
         return;
     }
 
@@ -125,37 +186,56 @@ void DiagnosticLog(const char* message) noexcept {
     line[lineLength++] = '\r';
     line[lineLength++] = '\n';
 
-    if (::TryAcquireSRWLockExclusive(&diagnosticLock) == FALSE) {
-        return;
+    if (!immediate) {
+        FileCommandService* service =
+            diagnosticFileService.load(std::memory_order_acquire);
+        if (service != nullptr) {
+            // A line that cannot be queued is dropped. Writing it here would
+            // open and write the log file on the calling game thread.
+            (void)service->SubmitDiagnosticLine(
+                std::string_view{line, lineLength});
+            return;
+        }
     }
-    HANDLE file = ::CreateFileW(
-        path.data(),
-        FILE_APPEND_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr,
-        OPEN_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr);
-    if (file != INVALID_HANDLE_VALUE) {
-        DWORD written{};
-        (void)::WriteFile(file, line, static_cast<DWORD>(lineLength), &written, nullptr);
-        (void)::CloseHandle(file);
-    }
-    ::ReleaseSRWLockExclusive(&diagnosticLock);
+    AppendDiagnosticLineToFile(std::string_view{line, lineLength}, true);
 }
 
-void DiagnosticLogFormat(const char* format, ...) noexcept {
+void WriteDiagnosticFormat(
+    bool immediate,
+    const char* format,
+    va_list arguments) noexcept {
     if (format == nullptr) {
         return;
     }
     char message[768]{};
+    const int result = std::vsnprintf(message, sizeof(message), format, arguments);
+    if (result >= 0) {
+        WriteDiagnosticMessage(message, immediate);
+    }
+}
+
+}
+
+void DiagnosticLog(const char* message) noexcept {
+    WriteDiagnosticMessage(message, false);
+}
+
+void DiagnosticLogImmediate(const char* message) noexcept {
+    WriteDiagnosticMessage(message, true);
+}
+
+void DiagnosticLogFormat(const char* format, ...) noexcept {
     va_list arguments;
     va_start(arguments, format);
-    const int result = std::vsnprintf(message, sizeof(message), format, arguments);
+    WriteDiagnosticFormat(false, format, arguments);
     va_end(arguments);
-    if (result >= 0) {
-        DiagnosticLog(message);
-    }
+}
+
+void DiagnosticLogFormatImmediate(const char* format, ...) noexcept {
+    va_list arguments;
+    va_start(arguments, format);
+    WriteDiagnosticFormat(true, format, arguments);
+    va_end(arguments);
 }
 
 const char* VtableHookStatusName(VtableHookStatus status) noexcept {
@@ -168,6 +248,11 @@ const char* VtableHookStatusName(VtableHookStatus status) noexcept {
     case VtableHookStatus::InvalidPlatform: return "InvalidPlatform";
     case VtableHookStatus::RuntimeVersionUnavailable: return "RuntimeVersionUnavailable";
     case VtableHookStatus::RuntimeVersionMismatch: return "RuntimeVersionMismatch";
+    case VtableHookStatus::AddressLibraryMissing: return "AddressLibraryMissing";
+    case VtableHookStatus::AddressLibraryRestartRequired: return "AddressLibraryRestartRequired";
+    case VtableHookStatus::AddressLibraryRequiresNewerXScal: return "AddressLibraryRequiresNewerXScal";
+    case VtableHookStatus::AddressLibraryInvalid: return "AddressLibraryInvalid";
+    case VtableHookStatus::AddressLibraryIncomplete: return "AddressLibraryIncomplete";
     case VtableHookStatus::AddressOverflow: return "AddressOverflow";
     case VtableHookStatus::SlotUnaligned: return "SlotUnaligned";
     case VtableHookStatus::SlotNotReadable: return "SlotNotReadable";

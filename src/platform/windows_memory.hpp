@@ -13,6 +13,5 @@ using VirtualQueryFn = SIZE_T(WINAPI*)(LPCVOID, PMEMORY_BASIC_INFORMATION, SIZE_
 [[nodiscard]] bool IsExecutableAddress(VirtualQueryFn virtualQuery, const void* address) noexcept;
 [[nodiscard]] bool RegionContains(const MEMORY_BASIC_INFORMATION& region, const void* address, std::size_t size) noexcept;
 [[nodiscard]] bool IsReadableRange(VirtualQueryFn virtualQuery, const void* address, std::size_t size) noexcept;
-[[nodiscard]] bool GetReadableSpanEnd(VirtualQueryFn virtualQuery, const char* current, std::size_t remaining, const char*& spanEnd) noexcept;
 
 }

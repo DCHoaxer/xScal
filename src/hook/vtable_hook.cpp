@@ -1,8 +1,8 @@
 #include "hook/vtable_hook.hpp"
 
+#include "platform/diagnostics.hpp"
+#include "platform/native_access.hpp"
 #include "platform/windows_memory.hpp"
-
-#include <limits>
 
 namespace sf {
 namespace {
@@ -70,6 +70,9 @@ bool VtableHook::RestoreProtection(void* slot, DWORD oldProtection) const noexce
 
 void VtableHook::BeginProtectionRecovery(
     void** slot, DWORD oldProtection, VtableHookStatus terminalResult) noexcept {
+    DiagnosticLogFormat(
+        "xScal: vtable slot %p protection restore failed; retrying on the next restore",
+        static_cast<void*>(slot));
     state_ = State::ProtectionRecovery;
     slot_ = slot;
     original_ = nullptr;
@@ -91,6 +94,16 @@ VtableHookStatus VtableHook::Install(
     const TargetProfile& profile,
     std::uintptr_t moduleBase,
     MovieRootGetVariable hook) noexcept {
+    return InstallSlot(
+        profile.primaryGetVariableSlotOffset,
+        moduleBase,
+        reinterpret_cast<void*>(hook));
+}
+
+VtableHookStatus VtableHook::InstallSlot(
+    std::uintptr_t slotOffset,
+    std::uintptr_t moduleBase,
+    void* hook) noexcept {
     std::scoped_lock lock{mutex_};
     if (state_ != State::Inactive) {
         return VtableHookStatus::AlreadyActive;
@@ -99,12 +112,11 @@ VtableHookStatus VtableHook::Install(
         return HasCompletePlatform() ? VtableHookStatus::InvalidArgument
                                      : VtableHookStatus::InvalidPlatform;
     }
-    if (profile.primaryGetVariableSlotOffset
-        > (std::numeric_limits<std::uintptr_t>::max)() - moduleBase) {
+    std::uintptr_t slotValue{};
+    if (!platform::TryAddAddress(moduleBase, slotOffset, slotValue)) {
         return VtableHookStatus::AddressOverflow;
     }
 
-    const auto slotValue = moduleBase + profile.primaryGetVariableSlotOffset;
     if ((slotValue % alignof(void*)) != 0) {
         return VtableHookStatus::SlotUnaligned;
     }
@@ -113,12 +125,12 @@ VtableHookStatus VtableHook::Install(
         return VtableHookStatus::SlotNotReadable;
     }
 
-    const auto rawHook = reinterpret_cast<void*>(hook);
-    void* observedOriginal = *reinterpret_cast<void* volatile*>(slot);
-    if (observedOriginal == rawHook) {
+    const auto rawHook = hook;
+    void* currentOriginal = *reinterpret_cast<void* volatile*>(slot);
+    if (currentOriginal == rawHook) {
         return VtableHookStatus::AlreadyActive;
     }
-    if (!IsExecutableTarget(observedOriginal)) {
+    if (!IsExecutableTarget(currentOriginal)) {
         return VtableHookStatus::OriginalNotExecutable;
     }
 
@@ -127,18 +139,18 @@ VtableHookStatus VtableHook::Install(
         return VtableHookStatus::ProtectFailed;
     }
 
-    observedOriginal = platform_.exchangePointer(
+    currentOriginal = platform_.exchangePointer(
         reinterpret_cast<PVOID volatile*>(slot), rawHook);
-    if (observedOriginal == rawHook) {
+    if (currentOriginal == rawHook) {
         if (!RestoreProtection(slot, oldProtection)) {
             BeginProtectionRecovery(slot, oldProtection, VtableHookStatus::AlreadyActive);
             return VtableHookStatus::ProtectionRestoreFailed;
         }
         return VtableHookStatus::AlreadyActive;
     }
-    if (!IsExecutableTarget(observedOriginal)) {
+    if (!IsExecutableTarget(currentOriginal)) {
         platform_.compareExchangePointer(
-            reinterpret_cast<PVOID volatile*>(slot), observedOriginal, rawHook);
+            reinterpret_cast<PVOID volatile*>(slot), currentOriginal, rawHook);
         if (!RestoreProtection(slot, oldProtection)) {
             BeginProtectionRecovery(
                 slot, oldProtection, VtableHookStatus::OriginalNotExecutable);
@@ -150,7 +162,7 @@ VtableHookStatus VtableHook::Install(
     if (platform_.flushInstructionCache(
             platform_.getCurrentProcess(), slot, sizeof(void*)) == FALSE) {
         platform_.compareExchangePointer(
-            reinterpret_cast<PVOID volatile*>(slot), observedOriginal, rawHook);
+            reinterpret_cast<PVOID volatile*>(slot), currentOriginal, rawHook);
         if (!RestoreProtection(slot, oldProtection)) {
             BeginProtectionRecovery(slot, oldProtection, VtableHookStatus::FlushFailed);
             return VtableHookStatus::ProtectionRestoreFailed;
@@ -160,17 +172,17 @@ VtableHookStatus VtableHook::Install(
 
     if (!RestoreProtection(slot, oldProtection)) {
         platform_.compareExchangePointer(
-            reinterpret_cast<PVOID volatile*>(slot), observedOriginal, rawHook);
+            reinterpret_cast<PVOID volatile*>(slot), currentOriginal, rawHook);
         (void)platform_.flushInstructionCache(
             platform_.getCurrentProcess(), slot, sizeof(void*));
-        BeginProtectionRecovery(
-            slot, oldProtection, VtableHookStatus::ProtectionRestoreFailed);
+        // The slot holds the original again, so the restore reports Restored.
+        BeginProtectionRecovery(slot, oldProtection, VtableHookStatus::Restored);
         return VtableHookStatus::ProtectionRestoreFailed;
     }
 
     state_ = State::Active;
     slot_ = slot;
-    original_ = reinterpret_cast<MovieRootGetVariable>(observedOriginal);
+    original_ = currentOriginal;
     hook_ = rawHook;
     return VtableHookStatus::Installed;
 }
@@ -200,9 +212,9 @@ VtableHookStatus VtableHook::Restore() noexcept {
         return VtableHookStatus::ProtectFailed;
     }
 
-    const auto observed = platform_.compareExchangePointer(
-        reinterpret_cast<PVOID volatile*>(slot_), reinterpret_cast<void*>(original_), hook_);
-    const bool changedByAnotherWriter = observed != hook_;
+    const auto current = platform_.compareExchangePointer(
+        reinterpret_cast<PVOID volatile*>(slot_), original_, hook_);
+    const bool changedByAnotherWriter = current != hook_;
     const bool flushed = changedByAnotherWriter || platform_.flushInstructionCache(
         platform_.getCurrentProcess(), slot_, sizeof(void*)) != FALSE;
     const auto terminalResult = changedByAnotherWriter
@@ -229,7 +241,9 @@ void** VtableHook::SlotAddress() const noexcept {
 
 MovieRootGetVariable VtableHook::Original() const noexcept {
     std::scoped_lock lock{mutex_};
-    return state_ == State::Active ? original_ : nullptr;
+    return state_ == State::Active
+        ? reinterpret_cast<MovieRootGetVariable>(original_)
+        : nullptr;
 }
 
 }

@@ -1,10 +1,19 @@
 #pragma once
 
-#include "config/config.h"
+#include "api/file_command_service.hpp"
+#include "api/scaleform_callbacks.hpp"
+#include "chat/chat_session.hpp"
+#include "config/target_profile.hpp"
+#include "datamanager/pip_boy_stats_effects_provider.hpp"
+#include "datamanager/time_data_provider.hpp"
 #include "hook/movie_root_hook.hpp"
+#include "input/input_state.hpp"
+#include "input/xinput_hook.hpp"
+#include "modules/xscal_priority/xscal_priority.hpp"
 
 #include <cstdint>
-#include <string_view>
+#include <mutex>
+#include <string>
 
 namespace sf {
 
@@ -12,37 +21,47 @@ struct RuntimeProcessPlatform final {
     using ReadRuntimeVersionFn = bool(*)(
         const wchar_t* executablePath,
         config::RuntimeVersion& version) noexcept;
+    using DownloadAddressLibraryFn = bool(*)(
+        TargetKind target,
+        const config::RuntimeVersion& runtime,
+        std::string& contents) noexcept;
 
     decltype(&::GetModuleFileNameW) getModuleFileName{};
     decltype(&::GetModuleHandleW) getModuleHandle{};
     ReadRuntimeVersionFn readRuntimeVersion{};
     decltype(&::MessageBoxW) messageBox{};
+    DownloadAddressLibraryFn downloadAddressLibrary{};
 };
 [[nodiscard]] RuntimeProcessPlatform SystemRuntimeProcessPlatform() noexcept;
 
-class BridgeRuntime final {
+class Runtime final {
 public:
-    explicit BridgeRuntime(
-        CallbackRegistry& callbackRegistry,
+    explicit Runtime(
         VtableHookPlatform platform = SystemVtableHookPlatform()) noexcept;
 
-    BridgeRuntime(const BridgeRuntime&) = delete;
-    BridgeRuntime& operator=(const BridgeRuntime&) = delete;
+    Runtime(const Runtime&) = delete;
+    Runtime& operator=(const Runtime&) = delete;
 
     [[nodiscard]] VtableHookStatus Initialize(
-        std::wstring_view executableName,
-        std::uintptr_t moduleBase,
-        const config::RuntimeVersion& runtimeVersion) noexcept;
-
-    [[nodiscard]] VtableHookStatus Shutdown() noexcept;
-    [[nodiscard]] bool IsActive() const noexcept;
+        const TargetProfile& profile,
+        std::uintptr_t moduleBase) noexcept;
 
 private:
+    std::mutex lifecycleMutex_;
+    bool initialized_{};
+    FileCommandService fileCommandService_;
+    chat::ChatSession chatSession_;
+    InputState inputState_;
+    datamanager::PipBoyStatsEffectsProvider statsEffectsProvider_;
+    datamanager::TimeDataProvider timeDataProvider_;
+    ScaleformCallbackRouter callbackRouter_;
     MovieRootHookController controller_;
+    GamepadInputFilterController gamepadInputFilter_;
+    modules::XScalPriority xscalPriority_;
 };
 
 [[nodiscard]] VtableHookStatus InitializeCurrentProcess(
-    BridgeRuntime& runtime,
+    Runtime& runtime,
     RuntimeProcessPlatform platform = SystemRuntimeProcessPlatform()) noexcept;
 
 }

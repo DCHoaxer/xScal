@@ -1,13 +1,54 @@
 #pragma once
 
+#include "config/target_profile.hpp"
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+
+struct XScalScaleformValue;
+
 namespace sf {
 
-class CallbackRegistry;
-enum class TargetKind;
+class FileCommandService;
+class InputState;
+struct ScaleformCall;
 
-// Registers the callbacks implemented by this DLL. Keep callback definitions
-// and the registration table together in scaleform_callbacks.cpp.
-[[nodiscard]] bool RegisterScaleformCallbacks(CallbackRegistry& registry) noexcept;
-void SetScaleformRuntimePlatform(TargetKind kind) noexcept;
+namespace datamanager {
+class PipBoyStatsEffectsProvider;
+class TimeDataProvider;
+}
+
+using PluginScaleformDispatch = bool(*)(
+    std::string_view name,
+    const XScalScaleformValue* arguments,
+    std::uint32_t argumentCount,
+    XScalScaleformValue& result) noexcept;
+
+class ScaleformCallbackRouter final {
+public:
+    static constexpr std::size_t kMaximumNameLength = 64;
+
+    ScaleformCallbackRouter(
+        FileCommandService& fileCommands,
+        InputState& input,
+        datamanager::PipBoyStatsEffectsProvider& statsEffects,
+        datamanager::TimeDataProvider& timeData,
+        PluginScaleformDispatch pluginDispatch = nullptr) noexcept;
+
+    void SetTargetKind(TargetKind targetKind) noexcept;
+    [[nodiscard]] bool Dispatch(
+        std::string_view name,
+        const ScaleformCall& call) const noexcept;
+
+private:
+    FileCommandService& fileCommands_;
+    InputState& input_;
+    datamanager::PipBoyStatsEffectsProvider& statsEffects_;
+    datamanager::TimeDataProvider& timeData_;
+    std::atomic<TargetKind> targetKind_{TargetKind::Steam};
+    PluginScaleformDispatch pluginDispatch_;
+};
 
 }

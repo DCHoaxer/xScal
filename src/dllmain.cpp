@@ -1,6 +1,5 @@
-#include "api/scaleform_callbacks.hpp"
-#include "api/callback_registry.hpp"
 #include "platform/diagnostics.hpp"
+#include "plugins/plugins.hpp"
 #include "runtime/runtime.hpp"
 
 #include <Windows.h>
@@ -10,45 +9,61 @@
 
 namespace {
 
-std::atomic<sf::BridgeRuntime*> runtimeInstance{};
+// Main instance. GFx function objects can remain callable after the MovieRoot hook is
+// restored. InitializeBridge pins the module and leaves this runtime allocated
+// so NativeFunctionHandler's exact 0x10-byte ABI object can route those calls.
+std::atomic<sf::Runtime*> runtimeInstance{};
 
-DWORD WINAPI InitializeBridge(LPVOID) noexcept {
-    sf::ClearDiagnosticLog();
-
-    auto& callbackRegistry = sf::GlobalCallbackRegistry();
-    (void)sf::RegisterScaleformCallbacks(callbackRegistry);
-
-    auto* candidate = new (std::nothrow) sf::BridgeRuntime(callbackRegistry);
-    if (candidate == nullptr) {
-        return 0;
+bool InitializeBridge() noexcept {
+    HMODULE pinnedModule{};
+    if (::GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(&runtimeInstance),
+            &pinnedModule) == FALSE) {
+        sf::DiagnosticLog("xScal initialization failed: could not pin module");
+        return false;
     }
 
-    sf::BridgeRuntime* expected = nullptr;
+    auto* candidate = new (std::nothrow) sf::Runtime();
+    if (candidate == nullptr) {
+        return false;
+    }
+
+    sf::Runtime* expected = nullptr;
     if (!runtimeInstance.compare_exchange_strong(
             expected, candidate, std::memory_order_acq_rel, std::memory_order_acquire)) {
         delete candidate;
-        return 0;
+        return false;
     }
 
     const auto hookStatus = sf::InitializeCurrentProcess(*candidate);
-    sf::DiagnosticLogFormat("Init: %s", sf::VtableHookStatusName(hookStatus));
+    if (hookStatus == sf::VtableHookStatus::Installed) {
+        sf::DiagnosticLog("Hook installed");
+    } else {
+        sf::DiagnosticLogFormat(
+            "Hook installation failed: %s",
+            sf::VtableHookStatusName(hookStatus));
+    }
+    return hookStatus == sf::VtableHookStatus::Installed;
+}
+
+DWORD WINAPI InitializePlugins(LPVOID) noexcept {
+    sf::plugins::Load();
     return 0;
 }
 
 }
 
+// export stuff
 extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) noexcept {
     if (reason == DLL_PROCESS_ATTACH) {
         sf::SetDiagnosticModule(module);
+        sf::plugins::InstallCreationHooks(::GetModuleHandleW(nullptr), &InitializeBridge);
         (void)::DisableThreadLibraryCalls(module);
-        HANDLE thread = ::CreateThread(nullptr, 0, &InitializeBridge, nullptr, 0, nullptr);
+        HANDLE thread = ::CreateThread(nullptr, 0, &InitializePlugins, nullptr, 0, nullptr);
         if (thread != nullptr) {
             (void)::CloseHandle(thread);
-        }
-    } else if (reason == DLL_PROCESS_DETACH) {
-        sf::BridgeRuntime* runtime = runtimeInstance.load(std::memory_order_acquire);
-        if (runtime != nullptr) {
-            (void)runtime->Shutdown();
         }
     }
     return TRUE;

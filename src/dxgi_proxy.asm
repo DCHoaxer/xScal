@@ -1,8 +1,6 @@
-option casemap:none
-
 extern ResolveSystemDxgiExport:proc
 
-.const
+.rdata SEGMENT READONLY 'DATA'
 forward_CreateDXGIFactory byte "CreateDXGIFactory", 0
 forward_CreateDXGIFactory1 byte "CreateDXGIFactory1", 0
 forward_CreateDXGIFactory2 byte "CreateDXGIFactory2", 0
@@ -14,6 +12,7 @@ forward_DXGIDeclareAdapterRemovalSupport byte "DXGIDeclareAdapterRemovalSupport"
 forward_DXGIDumpJournal byte "DXGIDumpJournal", 0
 forward_DXGIGetDebugInterface1 byte "DXGIGetDebugInterface1", 0
 forward_DXGIReportAdapterConfiguration byte "DXGIReportAdapterConfiguration", 0 ; just to be sure.
+.rdata ENDS
 
 .code
 

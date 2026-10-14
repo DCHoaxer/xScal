@@ -1,68 +1,57 @@
-#include "scaleform/bridge.hpp"
-#include "platform/windows_memory.hpp"
-#include "scaleform/scaleform_layout.hpp"
+#include "scaleform/native_handler.hpp"
 
+#include "api/scaleform_callbacks.hpp"
+#include "platform/diagnostics.hpp"
+#include "scaleform/memory_access.hpp"
+#include "scaleform/scaleform_layout.hpp"
+#include "scaleform/value.hpp"
+
+#include <bit>
 #include <cstring>
 #include <limits>
-
-#ifdef _WIN32
-#include <Windows.h>
-#endif
+#include <mutex>
+#include <shared_mutex>
+#include <string>
 
 namespace sf {
 namespace {
 
-thread_local char returnStringBuffer[layout::kReturnStringBufferSize]{};
+std::shared_mutex callbackRouterMutex;
+ScaleformCallbackRouter* activeCallbackRouter{};
+thread_local std::string returnStringBuffer;
 
-
+// Encodes a scalar or string payload as the GFx value written to a native call's result.
 template <typename T>
-[[nodiscard]] T ReadValue(const ScaleformValue& value, std::size_t offset) noexcept {
-    T result{};
-    std::memcpy(&result, value.storage + offset, sizeof(result));
-    return result;
-}
-
-[[nodiscard]] bool WriteBooleanResult(void* rawResult, bool booleanValue) noexcept {
+[[nodiscard]] bool WriteResultValue(
+    void* rawResult,
+    std::uint64_t type,
+    T payload) noexcept {
     if (rawResult == nullptr) {
         return false;
     }
-
-    std::byte value[sizeof(ScaleformValue)]{};
-    constexpr std::uint64_t kBooleanType = layout::kBooleanType;
-    const std::uint64_t encodedValue = booleanValue ? 1 : 0;
-    std::memcpy(value + layout::kValueTypeOffset, &kBooleanType, sizeof(kBooleanType));
-    std::memcpy(value + layout::kValueInternalTwoOffset, &encodedValue, sizeof(encodedValue));
-    std::memcpy(rawResult, value, sizeof(value));
+    ScaleformValue value{};
+    InitializeScaleformValue(value, type, payload);
+    std::memcpy(rawResult, &value, sizeof(value));
     return true;
 }
 
+// The returned pointer refers to returnStringBuffer, which stays valid until the
+// next string result on this thread.
 [[nodiscard]] bool WriteStringResult(
     void* rawResult,
     const char* text,
     std::size_t textLength) noexcept {
-    if (rawResult == nullptr || text == nullptr) {
+    if (text == nullptr || textLength > layout::kMaxReturnStringLength) {
         return false;
     }
 
-    const std::size_t copiedLength =
-        textLength < layout::kMaxReturnStringLength ? textLength : layout::kMaxReturnStringLength;
-    std::memcpy(returnStringBuffer, text, copiedLength);
-    returnStringBuffer[copiedLength] = '\0';
-
-    std::byte value[sizeof(ScaleformValue)]{};
-    constexpr std::uint64_t kStringType = layout::kStringType;
-    const char* const valueText = returnStringBuffer;
-    std::memcpy(value + layout::kValueTypeOffset, &kStringType, sizeof(kStringType));
-    std::memcpy(value + layout::kValueInternalTwoOffset, &valueText, sizeof(valueText));
-    std::memcpy(rawResult, value, sizeof(value));
-    return true;
-}
-
-template <typename T>
-[[nodiscard]] T ReadArgumentValue(const std::byte* argument, std::size_t offset) noexcept {
-    T result{};
-    std::memcpy(&result, argument + offset, sizeof(result));
-    return result;
+    try {
+        returnStringBuffer.assign(text, textLength);
+    }
+    catch (...) {
+        return false;
+    }
+    return WriteResultValue(rawResult, layout::kStringType, returnStringBuffer.c_str());
 }
 
 
@@ -70,173 +59,124 @@ template <typename T>
     return value >= 0x20 || value == '\t' || value == '\n' || value == '\r';
 }
 
-[[nodiscard]] bool IsReadableRange(const void* address, std::size_t size) noexcept {
-    return platform::IsReadableRange(&::VirtualQuery, address, size);
+[[nodiscard]] bool TryReadStringPointer(
+    const void* address,
+    const char*& text) noexcept {
+    text = nullptr;
+    __try {
+        std::memcpy(&text, address, sizeof(text));
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        text = nullptr;
+        return false;
+    }
+    return text != nullptr;
 }
 
-[[nodiscard]] bool GetReadableSpanEnd(
-    const char* current,
-    std::size_t remaining,
-    const char*& spanEnd) noexcept {
-    return platform::GetReadableSpanEnd(&::VirtualQuery, current, remaining, spanEnd);
-}
 [[nodiscard]] bool IsUtf8Continuation(unsigned char value) noexcept {
     return value >= 0x80 && value <= 0xBF;
 }
 
-[[nodiscard]] bool IsStrictUtf8(std::string_view text) noexcept {
-    for (std::size_t index = 0; index < text.size();) {
-        const auto first = static_cast<unsigned char>(text[index]);
-        if (first <= 0x7F) {
-            ++index;
-            continue;
-        }
-        if (first >= 0xC2 && first <= 0xDF) {
-            if (index + 1 >= text.size() ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 1]))) {
-                return false;
-            }
-            index += 2;
-            continue;
-        }
-        if (first == 0xE0) {
-            if (index + 2 >= text.size()) {
-                return false;
-            }
-            const auto second = static_cast<unsigned char>(text[index + 1]);
-            if (second < 0xA0 || second > 0xBF ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 2]))) {
-                return false;
-            }
-            index += 3;
-            continue;
-        }
-        if (first >= 0xE1 && first <= 0xEC || first >= 0xEE && first <= 0xEF) {
-            if (index + 2 >= text.size() ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 1])) ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 2]))) {
-                return false;
-            }
-            index += 3;
-            continue;
-        }
-        if (first == 0xED) {
-            if (index + 2 >= text.size()) {
-                return false;
-            }
-            const auto second = static_cast<unsigned char>(text[index + 1]);
-            if (second < 0x80 || second > 0x9F ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 2]))) {
-                return false;
-            }
-            index += 3;
-            continue;
-        }
-        if (first == 0xF0) {
-            if (index + 3 >= text.size()) {
-                return false;
-            }
-            const auto second = static_cast<unsigned char>(text[index + 1]);
-            if (second < 0x90 || second > 0xBF ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 2])) ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 3]))) {
-                return false;
-            }
-            index += 4;
-            continue;
-        }
-        if (first >= 0xF1 && first <= 0xF3) {
-            if (index + 3 >= text.size() ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 1])) ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 2])) ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 3]))) {
-                return false;
-            }
-            index += 4;
-            continue;
-        }
-        if (first == 0xF4) {
-            if (index + 3 >= text.size()) {
-                return false;
-            }
-            const auto second = static_cast<unsigned char>(text[index + 1]);
-            if (second < 0x80 || second > 0x8F ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 2])) ||
-                !IsUtf8Continuation(static_cast<unsigned char>(text[index + 3]))) {
-                return false;
-            }
-            index += 4;
-            continue;
-        }
+[[nodiscard]] bool TryValidateScaleformString(
+    const char* text,
+    std::size_t maximumBytesToInspect,
+    std::size_t& length) noexcept {
+    length = 0;
+    if (text == nullptr || maximumBytesToInspect == 0) {
         return false;
     }
-    return true;
+
+    __try {
+        std::size_t index{};
+        while (index < maximumBytesToInspect) {
+            const auto first = static_cast<unsigned char>(text[index]);
+            if (first == 0) {
+                length = index;
+                return true;
+            }
+            if (!IsScaleformStringByteAllowed(first)) {
+                return false;
+            }
+            if (first <= 0x7F) {
+                ++index;
+                continue;
+            }
+
+            std::size_t sequenceLength{};
+            if (first >= 0xC2 && first <= 0xDF) {
+                sequenceLength = 2;
+            } else if (first >= 0xE0 && first <= 0xEF) {
+                sequenceLength = 3;
+            } else if (first >= 0xF0 && first <= 0xF4) {
+                sequenceLength = 4;
+            } else {
+                return false;
+            }
+            if (sequenceLength > maximumBytesToInspect - index) {
+                return false;
+            }
+
+            const auto second =
+                static_cast<unsigned char>(text[index + 1]);
+            if (!IsUtf8Continuation(second) ||
+                (first == 0xE0 && second < 0xA0) ||
+                (first == 0xED && second > 0x9F) ||
+                (first == 0xF0 && second < 0x90) ||
+                (first == 0xF4 && second > 0x8F)) {
+                return false;
+            }
+            for (std::size_t continuation = 2;
+                 continuation < sequenceLength;
+                 ++continuation) {
+                if (!IsUtf8Continuation(
+                        static_cast<unsigned char>(
+                            text[index + continuation]))) {
+                    return false;
+                }
+            }
+            index += sequenceLength;
+        }
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        length = 0;
+        return false;
+    }
+    return false;
 }
 
 [[nodiscard]] bool DecodeStringCandidate(
     std::uint64_t encodedType,
     const void* encodedPointer,
-    std::string_view& decodedString) noexcept {
-    if ((static_cast<unsigned char>(encodedType) & layout::kTypeMask) != 6 || encodedPointer == nullptr) {
+    std::string_view& decodedString,
+    std::size_t maximumBytesToInspect) noexcept {
+    if ((static_cast<unsigned char>(encodedType) & layout::kTypeMask) != layout::kStringType ||
+        encodedPointer == nullptr) {
         return false;
     }
 
     const char* text = static_cast<const char*>(encodedPointer);
     if ((static_cast<unsigned char>(encodedType) & layout::kOwnedValueFlag) != 0) {
         const auto pointerBits = reinterpret_cast<std::uintptr_t>(encodedPointer);
-        if ((pointerBits & 7) != 0 || !IsReadableRange(encodedPointer, sizeof(const char*))) {
+        if ((pointerBits & 7) != 0 ||
+            !TryReadStringPointer(encodedPointer, text)) {
             return false;
         }
-        std::memcpy(&text, encodedPointer, sizeof(text));
     }
 
     if (text == nullptr) {
         return false;
     }
 
-    const char* current = text;
-    const char* readableEnd = nullptr;
-    for (std::size_t index = 0; index < layout::kMaxScaleformStringLength; ++index) {
-        if (current == readableEnd &&
-            !GetReadableSpanEnd(current, layout::kMaxScaleformStringLength - index, readableEnd)) {
-            return false;
-        }
-        const unsigned char value = static_cast<unsigned char>(*current);
-        if (value == 0) {
-
-            const std::string_view candidate{text, index};
-            if (!IsStrictUtf8(candidate)) {
-                return false;
-            }
-            decodedString = candidate;
-            return true;
-        }
-        if (!IsScaleformStringByteAllowed(value)) {
-            return false;
-        }
-        ++current;
+    std::size_t length{};
+    if (!TryValidateScaleformString(
+            text, maximumBytesToInspect, length)) {
+        return false;
     }
-    return false;
+    decodedString = std::string_view{text, length};
+    return true;
 }
 
-}
+}  // namespace
 
-ScaleformValueInfo InspectScaleformValue(const ScaleformValue& value) noexcept {
-    return {
-        ReadValue<std::uint8_t>(value, layout::kValueTypeOffset),
-        ReadValue<void*>(value, layout::kValueInternalOneOffset),
-        ReadValue<void*>(value, layout::kValueInternalTwoOffset),
-    };
-}
-
-bool IsObjectLikeScaleformValue(const ScaleformValue& value) noexcept {
-    const auto info = InspectScaleformValue(value);
-    const auto baseType = static_cast<std::uint8_t>(info.rawType & layout::kTypeMask);
-    return baseType >= 8 && baseType <= 10 &&
-        info.objectInterface != nullptr && info.data != nullptr;
-}
-
-NativeFunctionHandler::NativeFunctionHandler(CallbackRegistry& callbackRegistry) noexcept
+NativeFunctionHandler::NativeFunctionHandler() noexcept
     : vtable_{nullptr},
       referenceCount_{1},
       referenceCountPadding_{0} {
@@ -249,10 +189,66 @@ NativeFunctionHandler::NativeFunctionHandler(CallbackRegistry& callbackRegistry)
         reinterpret_cast<HandlerVtableEntry>(&NativeFunctionHandler::Invoke),
     };
     vtable_ = kVtable;
-    callbackRegistry_ = &callbackRegistry;
 }
 
-CallbackRegistry* NativeFunctionHandler::callbackRegistry_ = nullptr;
+bool PublishNativeCallbackRouter(
+    ScaleformCallbackRouter& callbackRouter) noexcept {
+    std::unique_lock lock{callbackRouterMutex};
+    if (activeCallbackRouter != nullptr &&
+        activeCallbackRouter != &callbackRouter) {
+        return false;
+    }
+    activeCallbackRouter = &callbackRouter;
+    return true;
+}
+
+void ClearNativeCallbackRouter(
+    ScaleformCallbackRouter& callbackRouter) noexcept {
+    std::unique_lock lock{callbackRouterMutex};
+    if (activeCallbackRouter == &callbackRouter) {
+        activeCallbackRouter = nullptr;
+    }
+}
+
+bool CommitScaleformResult(
+    const FunctionParams& params,
+    const ScaleformResult& result) noexcept {
+    switch (result.kind) {
+        case ScaleformResultKind::Boolean:
+            return WriteResultValue(
+                params.result,
+                layout::kBooleanType,
+                std::uint64_t{result.booleanValue ? 1U : 0U});
+        case ScaleformResultKind::Int32:
+            return WriteResultValue(
+                params.result,
+                layout::kIntType,
+                result.int32Value);
+        case ScaleformResultKind::UInt32:
+            return WriteResultValue(
+                params.result,
+                layout::kUIntType,
+                result.uint32Value);
+        case ScaleformResultKind::Number:
+            return WriteResultValue(
+                params.result,
+                layout::kNumberType,
+                result.numberValue);
+        case ScaleformResultKind::String:
+            return WriteStringResult(
+                params.result,
+                result.stringValue.data(),
+                result.stringValue.size());
+        default:
+            return false;
+    }
+}
+
+bool WriteScaleformStringResult(
+    void* rawResult,
+    std::string_view text) noexcept {
+    return WriteStringResult(rawResult, text.data(), text.size());
+}
 
 void* __fastcall NativeFunctionHandler::Identity(void* handler) noexcept {
     return handler;
@@ -261,63 +257,110 @@ void* __fastcall NativeFunctionHandler::Identity(void* handler) noexcept {
 void __fastcall NativeFunctionHandler::Invoke(
     void* handler,
     const FunctionParams* params) noexcept {
-    if (handler == nullptr || callbackRegistry_ == nullptr ||
-        params == nullptr || params->arguments == nullptr || params->argumentCount == 0) {
+    if (handler == nullptr || params == nullptr ||
+        params->arguments == nullptr || params->argumentCount == 0) {
         return;
     }
 
     std::string_view callbackName;
-    if (!TryDecodeScaleformString(params->arguments, callbackName)) {
+    if (!TryDecodeScaleformString(
+            params->arguments,
+            callbackName,
+            ScaleformCallbackRouter::kMaximumNameLength + 1)) {
+        DiagnosticLogFormat(
+            "Scaleform call: callback name is not a decodable string (arguments=%zu)",
+            params->argumentCount);
         return;
     }
-
     ScaleformResult callbackResult;
     const ScaleformCall call{
         params->arguments,
         params->argumentCount,
         &callbackResult,
+        params->movie,
+        params->thisObject,
+        params->argumentFrame,
     };
-    if (!callbackRegistry_->Dispatch(callbackName, call)) {
+    std::shared_lock routerLock{callbackRouterMutex};
+    if (activeCallbackRouter == nullptr ||
+        !activeCallbackRouter->Dispatch(callbackName, call)) {
+        DiagnosticLogFormat(
+            "Scaleform call: dispatch failed (name=%.*s, arguments=%zu)",
+            static_cast<int>(callbackName.size()),
+            callbackName.data(),
+            params->argumentCount);
         return;
     }
-    if (callbackResult.kind == ScaleformResultKind::Boolean) {
-        (void)WriteBooleanResult(params->result, callbackResult.booleanValue);
-    } else if (callbackResult.kind == ScaleformResultKind::String) {
-        (void)WriteStringResult(
-            params->result,
-            callbackResult.stringValue.data(),
-            callbackResult.stringValue.size());
-    }
+    (void)CommitScaleformResult(*params, callbackResult);
+}
+
+ArgumentCandidates ReadArgumentCandidates(
+    const std::byte* argumentRecord) noexcept {
+    ArgumentCandidates candidates{};
+    std::memcpy(
+        &candidates.primary.type,
+        argumentRecord + layout::kPrimaryArgumentTypeOffset,
+        sizeof(candidates.primary.type));
+    std::memcpy(
+        &candidates.primary.payload,
+        argumentRecord + layout::kPrimaryArgumentPointerOffset,
+        sizeof(candidates.primary.payload));
+    std::memcpy(
+        &candidates.fallback.type,
+        argumentRecord + layout::kFallbackArgumentTypeOffset,
+        sizeof(candidates.fallback.type));
+    std::memcpy(
+        &candidates.fallback.payload,
+        argumentRecord + layout::kFallbackArgumentPointerOffset,
+        sizeof(candidates.fallback.payload));
+    return candidates;
 }
 
 bool TryDecodeScaleformString(
     const std::byte* argumentRecord,
-    std::string_view& decodedString) noexcept {
+    std::string_view& decodedString,
+    std::size_t maximumBytesToInspect) noexcept {
     decodedString = {};
-    if (argumentRecord == nullptr) {
+    if (argumentRecord == nullptr || maximumBytesToInspect == 0) {
         return false;
     }
 
-    // 0x18015086F passes +0x18/+0x20 as the preferred pair to 0x180145E30;
-    // the helper retries +0x08/+0x10 when the preferred pair is not a string.
-    const auto primaryType = ReadArgumentValue<std::uint64_t>(argumentRecord, layout::kPrimaryArgumentTypeOffset);
-    const auto primaryPointer = ReadArgumentValue<const void*>(argumentRecord, layout::kPrimaryArgumentPointerOffset);
-    if (DecodeStringCandidate(primaryType, primaryPointer, decodedString)) {
+    // +0x18/+0x20 is the preferred pair; the game retries +0x08/+0x10 when
+    // the preferred pair is not a string.
+    const auto candidates = ReadArgumentCandidates(argumentRecord);
+    if (DecodeStringCandidate(
+            candidates.primary.type,
+            std::bit_cast<const void*>(candidates.primary.payload),
+            decodedString,
+            maximumBytesToInspect)) {
         return true;
     }
 
-    const auto fallbackType = ReadArgumentValue<std::uint64_t>(argumentRecord, layout::kFallbackArgumentTypeOffset);
-    const auto fallbackPointer = ReadArgumentValue<const void*>(argumentRecord, layout::kFallbackArgumentPointerOffset);
-    return DecodeStringCandidate(fallbackType, fallbackPointer, decodedString);
+    return DecodeStringCandidate(
+        candidates.fallback.type,
+        std::bit_cast<const void*>(candidates.fallback.payload),
+        decodedString,
+        maximumBytesToInspect);
 }
 
-
-
+bool TryDecodeScaleformValueString(
+    const ScaleformValue& value,
+    std::string_view& decodedString,
+    std::size_t maximumBytesToInspect) noexcept {
+    decodedString = {};
+    const auto info = InspectScaleformValue(value);
+    return DecodeStringCandidate(
+        info.rawType,
+        info.data,
+        decodedString,
+        maximumBytesToInspect);
+}
 
 bool TryGetScaleformStringArgument(
     const ScaleformCall& call,
     std::size_t argumentIndex,
-    std::string_view& decodedString) noexcept {
+    std::string_view& decodedString,
+    std::size_t maximumBytesToInspect) noexcept {
     decodedString = {};
     if (call.arguments == nullptr || argumentIndex >= call.argumentCount ||
         argumentIndex > (std::numeric_limits<std::size_t>::max)() / layout::kFunctionArgumentSize) {
@@ -326,5 +369,8 @@ bool TryGetScaleformStringArgument(
     const auto* arguments = static_cast<const std::byte*>(call.arguments);
     return TryDecodeScaleformString(
         arguments + argumentIndex * layout::kFunctionArgumentSize,
-        decodedString);
-}}
+        decodedString,
+        maximumBytesToInspect);
+}
+
+}  // namespace sf
