@@ -41,6 +41,6 @@ inline constexpr std::uint8_t kStringType = 6;
 inline constexpr std::uint8_t kObjectType = 8;
 inline constexpr std::uint8_t kDisplayObjectType = 10;
 inline constexpr std::size_t kMaxScaleformStringLength = 0x1000000;
-inline constexpr std::size_t kMaxReturnStringLength = 40 * 1024;
+inline constexpr std::size_t kMaxReturnStringLength = 5 * 1024 * 1024;
 
 }

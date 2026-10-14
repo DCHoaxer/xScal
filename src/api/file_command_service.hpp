@@ -42,7 +42,7 @@ public:
     static constexpr std::size_t kMaximumQueuedCommands = 64;
     static constexpr std::size_t kMaximumPayloadBytes = 5U * 1024U * 1024U; // Increase to 5MB.
     static constexpr std::size_t kMaximumQueuedPayloadBytes =
-        4U * 1024U * 1024U;
+        20U * 1024U * 1024U;
 
     FileCommandService() noexcept = default;
     ~FileCommandService();
