@@ -24,12 +24,50 @@ Yes, this extenders implements runtime forwarder.
 
 ## Build
 
-Just do:
+Requirements (Windows x64 only):
+
+- Visual Studio 2019 or newer (or Build Tools) with the C++ workload and a Windows 10/11 SDK
+- CMake 3.20+ on `PATH`
+- xScal plugin SDK headers (the directory containing `xscal/plugin_api.h`) — not included in this repo
+- [yyjson](https://github.com/ibireme/yyjson) source (the directory containing `yyjson.c` and `yyjson.h`) — not included in this repo
+
+On the first build, run these from an x64 Native Tools / Developer Command Prompt. Doing so tells CMake where the SDK and yyjson are:
+
+```bat
+cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ^
+  -DXSCAL_SDK_INCLUDE_DIR=C:\path\to\xscal-sdk\include ^
+  -DXSCAL_YYJSON_DIR=C:\path\to\yyjson\src
+build.bat
+```
+
+For later builds, just run:
 
 ```bat
 build.bat
 ```
-Needs at least MSVC 2019
+
+`build.bat` locates Visual Studio via `vswhere` when not already in a developer prompt. The output is `build\dxgi.dll`, and it is also copied to `dist\dxgi.dll`. Delete the `build` folder to reset the configured paths.
+
+### Linux (cross-compile)
+
+The Windows DLL can be cross-compiled with clang-cl and the MSVC CRT and Windows SDK fetched by [xwin](https://github.com/Jake-Shadle/xwin).
+
+Requirements:
+
+- CMake 3.29+, Ninja, and clang, lld, and llvm (`clang-cl`, `lld-link`, `llvm-lib`, `llvm-ml`, `llvm-mt`, `llvm-rc`)
+  - Fedora: `sudo dnf install cmake ninja-build clang lld llvm`
+- xwin (`cargo install xwin --locked`), only if there is no Windows SDK in `~/.xwin` yet
+- The same xScal plugin SDK headers and yyjson source as on Windows
+
+Build:
+
+```sh
+XSCAL_SDK_INCLUDE_DIR=/path/to/xscal-sdk/include \
+XSCAL_YYJSON_DIR=/path/to/yyjson/src \
+./build.sh
+```
+
+The first run downloads the Windows SDK and CRT into `~/.xwin` (accepting Microsoft's license). Set `XWIN_ROOT` to use an existing xwin splat elsewhere. The output is `build/linux-xwin/dxgi.dll`, and it is also copied to `dist/dxgi.dll`.
 
 ## Extending callbacks
 

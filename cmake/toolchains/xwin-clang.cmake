@@ -1,0 +1,75 @@
+if(CMAKE_VERSION VERSION_LESS 3.29)
+    message(FATAL_ERROR "The Fedora cross build requires CMake 3.29 or newer")
+endif()
+
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR AMD64)
+set(CMAKE_TRY_COMPILE_CONFIGURATION MinSizeRel)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL CACHE STRING "" FORCE)
+
+if(NOT XWIN_ROOT AND DEFINED ENV{XWIN_ROOT})
+    set(XWIN_ROOT "$ENV{XWIN_ROOT}")
+endif()
+if(NOT XWIN_ROOT)
+    message(FATAL_ERROR "Set XWIN_ROOT to an xwin splat directory")
+endif()
+
+get_filename_component(XWIN_ROOT "${XWIN_ROOT}" ABSOLUTE)
+set(XWIN_ROOT "${XWIN_ROOT}" CACHE PATH "xwin SDK and CRT root" FORCE)
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES XWIN_ROOT)
+set(XWIN_CRT_INCLUDE "${XWIN_ROOT}/crt/include")
+set(XWIN_CRT_LIB "${XWIN_ROOT}/crt/lib/x86_64")
+set(XWIN_SDK_INCLUDE "${XWIN_ROOT}/sdk/include")
+set(XWIN_SDK_UCRT_LIB "${XWIN_ROOT}/sdk/lib/ucrt/x86_64")
+set(XWIN_SDK_UM_LIB "${XWIN_ROOT}/sdk/lib/um/x86_64")
+
+foreach(required_path IN ITEMS
+        "${XWIN_CRT_INCLUDE}"
+        "${XWIN_CRT_LIB}"
+        "${XWIN_SDK_INCLUDE}"
+        "${XWIN_SDK_UCRT_LIB}"
+        "${XWIN_SDK_UM_LIB}")
+    if(NOT EXISTS "${required_path}")
+        message(FATAL_ERROR "The xwin directory is incomplete: ${required_path}")
+    endif()
+endforeach()
+
+find_program(XSCAL_CLANG_CL clang-cl REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+find_program(XSCAL_LLD_LINK lld-link REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+find_program(XSCAL_LLVM_LIB llvm-lib REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+find_program(XSCAL_LLVM_ML llvm-ml REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+find_program(XSCAL_LLVM_MT llvm-mt REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+find_program(XSCAL_LLVM_RC llvm-rc REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+
+set(CMAKE_C_COMPILER "${XSCAL_CLANG_CL}")
+set(CMAKE_CXX_COMPILER "${XSCAL_CLANG_CL}")
+set(CMAKE_C_COMPILER_TARGET x86_64-pc-windows-msvc)
+set(CMAKE_CXX_COMPILER_TARGET x86_64-pc-windows-msvc)
+set(CMAKE_ASM_MASM_COMPILER "${XSCAL_LLVM_ML}")
+set(CMAKE_ASM_MASM_FLAGS_INIT "--m64")
+set(CMAKE_LINKER "${XSCAL_LLD_LINK}")
+set(CMAKE_LINKER_TYPE LLD)
+set(CMAKE_AR "${XSCAL_LLVM_LIB}")
+set(CMAKE_MT "${XSCAL_LLVM_MT}")
+set(CMAKE_RC_COMPILER "${XSCAL_LLVM_RC}")
+set(XWIN_SDK_UCRT_INCLUDE "${XWIN_SDK_INCLUDE}/ucrt")
+set(XWIN_SDK_UM_INCLUDE "${XWIN_SDK_INCLUDE}/um")
+set(XWIN_SDK_SHARED_INCLUDE "${XWIN_SDK_INCLUDE}/shared")
+
+set(XWIN_COMPILE_FLAGS
+    "-fms-compatibility-version=19.44 /vctoolsdir \"${XWIN_ROOT}/crt\" /winsdkdir \"${XWIN_ROOT}/sdk\" /imsvc \"${XWIN_CRT_INCLUDE}\" /imsvc \"${XWIN_SDK_UCRT_INCLUDE}\" /imsvc \"${XWIN_SDK_UM_INCLUDE}\" /imsvc \"${XWIN_SDK_SHARED_INCLUDE}\""
+)
+set(CMAKE_C_FLAGS_INIT "${XWIN_COMPILE_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${XWIN_COMPILE_FLAGS}")
+
+set(XWIN_LINK_FLAGS
+    "/libpath:\"${XWIN_CRT_LIB}\" /libpath:\"${XWIN_SDK_UCRT_LIB}\" /libpath:\"${XWIN_SDK_UM_LIB}\"")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "${XWIN_LINK_FLAGS}")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "${XWIN_LINK_FLAGS}")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "${XWIN_LINK_FLAGS}")
+
+set(CMAKE_FIND_ROOT_PATH "${XWIN_ROOT}/crt" "${XWIN_ROOT}/sdk")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
