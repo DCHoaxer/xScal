@@ -14,7 +14,7 @@ struct FunctionParams;
 
 namespace modstorage {
 
-inline constexpr std::size_t kMaximumDocumentSize = 40 * 1024;
+inline constexpr std::size_t kMaximumDocumentSize = 5 * 1024 * 1024;
 
 [[nodiscard]] bool IsValidName(std::string_view name) noexcept;
 [[nodiscard]] bool IsValidJsonDocument(std::string_view document) noexcept;
