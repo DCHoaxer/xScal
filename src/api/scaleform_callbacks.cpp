@@ -8,6 +8,7 @@
 #include "common/json.hpp"
 #include "config/config.h"
 #include "datamanager/pip_boy_stats_effects_provider.hpp"
+#include "datamanager/player_map_position_provider.hpp"
 #include "datamanager/time_data_provider.hpp"
 #include "hook/movie_root_hook.hpp"
 #include "input/input_state.hpp"
@@ -44,6 +45,8 @@ constexpr std::string_view kPendingEffectsPayload =
     R"json({"status":"pending","reason":"snapshot"})json";
 constexpr std::string_view kPendingTimeDataPayload =
     R"json({"status":"pending","reason":"time_data"})json";
+constexpr std::string_view kPendingPlayerMapPositionPayload =
+    R"json({"status":"pending","reason":"player_map_position"})json";
 constexpr std::string_view kInvalidRequestPayload =
     R"json({"status":"error","reason":"invalid_request"})json";
 
@@ -54,6 +57,7 @@ struct ScaleformCallbackTargets final {
     InputState& input;
     datamanager::PipBoyStatsEffectsProvider& statsEffects;
     datamanager::TimeDataProvider& timeData;
+    datamanager::PlayerMapPositionProvider& playerMapPosition;
     const std::atomic<TargetKind>& targetKind;
 };
 
@@ -337,6 +341,26 @@ using StealthMeterRequest =
             return call.result->SetString(kInactiveProviderPayload);
         case datamanager::StatsEffectsRequestStatus::SnapshotUnavailable:
             return call.result->SetString(kPendingEffectsPayload);
+        default:
+            return call.result->SetString(kInvalidRequestPayload);
+    }
+}
+
+[[nodiscard]] [[nodiscard]] [[nodiscard]] bool HandlePlayerMapPosition(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.playerMapPosition.Request(payload);
+    switch (status) {
+        case datamanager::PlayerMapPositionRequestStatus::Delivered:
+            if (call.result->SetString(payload)) {
+                return true;
+            }
+            return call.result->SetString(kInvalidRequestPayload);
+        case datamanager::PlayerMapPositionRequestStatus::Inactive:
+            return call.result->SetString(kInactiveProviderPayload);
+        case datamanager::PlayerMapPositionRequestStatus::SnapshotUnavailable:
+            return call.result->SetString(kPendingPlayerMapPositionPayload);
         default:
             return call.result->SetString(kInvalidRequestPayload);
     }
@@ -733,6 +757,7 @@ constexpr std::array kScaleformCallbacks{
         &HandleQueuedFileWrite<FileCommand::WriteVendorLogFile>},
     ScaleformCallbackDefinition{"xsGetEnemyMeterData", &HandleEnemyMeter},
     ScaleformCallbackDefinition{"xsGetPipboySTATSEffects", &HandleStatsEffects},
+    ScaleformCallbackDefinition{"xsGetPlayerMapPosition", &HandlePlayerMapPosition},
     ScaleformCallbackDefinition{"xsGetStealthMeterData", &HandleStealthMeter},
     ScaleformCallbackDefinition{"xsGetTimeData", &HandleTimeData},
 };
@@ -772,11 +797,13 @@ ScaleformCallbackRouter::ScaleformCallbackRouter(
     InputState& input,
     datamanager::PipBoyStatsEffectsProvider& statsEffects,
     datamanager::TimeDataProvider& timeData,
+    datamanager::PlayerMapPositionProvider& playerMapPosition,
     PluginScaleformDispatch pluginDispatch) noexcept
     : fileCommands_{fileCommands},
       input_{input},
       statsEffects_{statsEffects},
       timeData_{timeData},
+      playerMapPosition_{playerMapPosition},
       pluginDispatch_{pluginDispatch != nullptr
           ? pluginDispatch
           : &plugins::DispatchScaleform} {}
@@ -796,6 +823,7 @@ bool ScaleformCallbackRouter::Dispatch(
         input_,
         statsEffects_,
         timeData_,
+        playerMapPosition_,
         targetKind_,
     };
     const auto* const callback = FindCallback(name);

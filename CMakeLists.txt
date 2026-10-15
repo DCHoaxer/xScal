@@ -46,6 +46,8 @@ set(XSCAL_CORE_SOURCES
     src/input/input_state.cpp
     src/datamanager/pip_boy_stats_effects_provider.cpp
     src/datamanager/active_effect_snapshot.cpp
+    src/datamanager/player_map_position_provider.cpp
+    src/datamanager/player_map_position_snapshot.cpp
     src/datamanager/time_data_provider.cpp
     src/datamanager/time_data_snapshot.cpp
     src/platform/diagnostics.cpp

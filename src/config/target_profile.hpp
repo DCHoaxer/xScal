@@ -81,10 +81,30 @@ struct NativeTimeDataProfile final {
         const NativeTimeDataProfile&) const noexcept = default;
 };
 
+// Exact-build data needed to read the local player's position in the
+// worldspace map frame.
+struct NativePlayerMapPositionProfile final {
+    std::uintptr_t localPlayerGlobal;
+    std::uintptr_t localPlayerPrimaryVtable;
+    std::uintptr_t mapWorldBoundsGlobal;
+
+    std::size_t referencePositionOffset;
+    std::size_t referenceParentCellOffset;
+    std::size_t cellFlagsOffset;
+    std::size_t cellWorldSpaceOffset;
+    std::size_t worldSpaceMapScaleOffset;
+    std::size_t worldSpaceMapOffsetOffset;
+    std::size_t worldSpaceMapBoundsOffset;
+
+    [[nodiscard]] constexpr bool operator==(
+        const NativePlayerMapPositionProfile&) const noexcept = default;
+};
+
 struct DataManagerProfile final {
     NativeActiveEffectProfile pipBoyStatsEffects;
     NativeEnemyMeterProfile enemyMeter;
     NativeTimeDataProfile timeData;
+    NativePlayerMapPositionProfile playerMapPosition;
 
     [[nodiscard]] constexpr bool operator==(
         const DataManagerProfile&) const noexcept = default;

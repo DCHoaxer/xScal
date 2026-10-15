@@ -5,6 +5,7 @@
 #include "chat/chat_session.hpp"
 #include "config/target_profile.hpp"
 #include "datamanager/pip_boy_stats_effects_provider.hpp"
+#include "datamanager/player_map_position_provider.hpp"
 #include "datamanager/time_data_provider.hpp"
 #include "hook/movie_root_hook.hpp"
 #include "input/input_state.hpp"
@@ -54,6 +55,7 @@ private:
     InputState inputState_;
     datamanager::PipBoyStatsEffectsProvider statsEffectsProvider_;
     datamanager::TimeDataProvider timeDataProvider_;
+    datamanager::PlayerMapPositionProvider playerMapPositionProvider_;
     ScaleformCallbackRouter callbackRouter_;
     MovieRootHookController controller_;
     GamepadInputFilterController gamepadInputFilter_;

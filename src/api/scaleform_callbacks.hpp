@@ -18,6 +18,7 @@ struct ScaleformCall;
 namespace datamanager {
 class PipBoyStatsEffectsProvider;
 class TimeDataProvider;
+class PlayerMapPositionProvider;
 }
 
 using PluginScaleformDispatch = bool(*)(
@@ -35,6 +36,7 @@ public:
         InputState& input,
         datamanager::PipBoyStatsEffectsProvider& statsEffects,
         datamanager::TimeDataProvider& timeData,
+        datamanager::PlayerMapPositionProvider& playerMapPosition,
         PluginScaleformDispatch pluginDispatch = nullptr) noexcept;
 
     void SetTargetKind(TargetKind targetKind) noexcept;
@@ -47,6 +49,7 @@ private:
     InputState& input_;
     datamanager::PipBoyStatsEffectsProvider& statsEffects_;
     datamanager::TimeDataProvider& timeData_;
+    datamanager::PlayerMapPositionProvider& playerMapPosition_;
     std::atomic<TargetKind> targetKind_{TargetKind::Steam};
     PluginScaleformDispatch pluginDispatch_;
 };

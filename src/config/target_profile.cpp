@@ -115,6 +115,36 @@ void ReadTimeDataProfile(
     }
 }
 
+void ReadPlayerMapPositionProfile(
+    const XScalAddressLibraryV1& addresses,
+    config::NativePlayerMapPositionProfile& position) noexcept {
+    position = {};
+    config::NativePlayerMapPositionProfile result{};
+    const bool complete =
+        ReadRva(addresses, XSCAL_ADDRESS_LOCAL_PLAYER_GLOBAL, result.localPlayerGlobal) &&
+        ReadRva(addresses, XSCAL_ADDRESS_LOCAL_PLAYER_PRIMARY_VTABLE, result.localPlayerPrimaryVtable) &&
+        ReadRva(addresses, XSCAL_ADDRESS_MAP_WORLD_BOUNDS_GLOBAL, result.mapWorldBoundsGlobal) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_REFERENCE_POSITION_OFFSET, result.referencePositionOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_REFERENCE_PARENT_CELL_OFFSET, result.referenceParentCellOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_CELL_FLAGS_OFFSET, result.cellFlagsOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_CELL_WORLD_SPACE_OFFSET, result.cellWorldSpaceOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_WORLD_SPACE_MAP_SCALE_OFFSET, result.worldSpaceMapScaleOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_WORLD_SPACE_MAP_OFFSET_OFFSET, result.worldSpaceMapOffsetOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_WORLD_SPACE_MAP_BOUNDS_OFFSET, result.worldSpaceMapBoundsOffset);
+    // A database for a build whose layout was not verified carries these IDs
+    // with value 0, so a zero constant means unavailable.
+    if (complete &&
+        result.referencePositionOffset != 0 &&
+        result.referenceParentCellOffset != 0 &&
+        result.cellFlagsOffset != 0 &&
+        result.cellWorldSpaceOffset != 0 &&
+        result.worldSpaceMapScaleOffset != 0 &&
+        result.worldSpaceMapOffsetOffset != 0 &&
+        result.worldSpaceMapBoundsOffset != 0) {
+        position = result;
+    }
+}
+
 }
 
 const TargetDefinition* SelectTarget(
@@ -165,6 +195,7 @@ bool ReadTargetProfile(
     ReadStatsEffectsProfile(addresses, result.dataManager.pipBoyStatsEffects);
     ReadEnemyMeterProfile(addresses, result.dataManager.enemyMeter);
     ReadTimeDataProfile(addresses, result.dataManager.timeData);
+    ReadPlayerMapPositionProfile(addresses, result.dataManager.playerMapPosition);
 
     std::size_t statsEffectsEnabled{};
     result.pipBoyStatsEffectsEnabled =

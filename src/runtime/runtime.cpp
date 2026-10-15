@@ -205,11 +205,13 @@ RuntimeProcessPlatform SystemRuntimeProcessPlatform() noexcept {
 Runtime::Runtime(VtableHookPlatform platform) noexcept
     : statsEffectsProvider_(platform.virtualQuery),
       timeDataProvider_(platform.virtualQuery),
+      playerMapPositionProvider_(platform.virtualQuery),
       callbackRouter_(
           fileCommandService_,
           inputState_,
           statsEffectsProvider_,
-          timeDataProvider_),
+          timeDataProvider_,
+          playerMapPositionProvider_),
       controller_(callbackRouter_, platform),
       gamepadInputFilter_(platform),
       xscalPriority_(
@@ -256,10 +258,13 @@ VtableHookStatus Runtime::Initialize(
             statsEffectsProvider_.Install(profile, moduleBase);
         const bool timeDataInstalled =
             timeDataProvider_.Install(profile, moduleBase);
+        const bool playerMapPositionInstalled =
+            playerMapPositionProvider_.Install(profile, moduleBase);
         DiagnosticLogFormat(
-            "xScal Providers: {StatsEffectsProvider: %s, TimeDataProvider: %s}",
+            "xScal Providers: {StatsEffectsProvider: %s, TimeDataProvider: %s, PlayerMapPositionProvider: %s}",
             statsEffectsInstalled ? "Enabled" : "Disabled",
-            timeDataInstalled ? "Enabled" : "Disabled");
+            timeDataInstalled ? "Enabled" : "Disabled",
+            playerMapPositionInstalled ? "Enabled" : "Disabled");
         DiagnosticLogFormat(
             "xScal Modules: {xScalPriority: %s}",
             config::GetRuntimeConfig().xscalPriority.enabled
