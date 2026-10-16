@@ -329,6 +329,16 @@ bool UnsuppressGamepadButtonsForGame(
         activeSuppression.Unsuppress(buttons, userIndex);
 }
 
+bool SuppressGamepadAnalogForGame(std::uint32_t userIndex) noexcept {
+    return activeFilterInstalled.load(std::memory_order_acquire) &&
+        activeSuppression.SuppressAnalog(userIndex);
+}
+
+bool UnsuppressGamepadAnalogForGame(std::uint32_t userIndex) noexcept {
+    return activeFilterInstalled.load(std::memory_order_acquire) &&
+        activeSuppression.UnsuppressAnalog(userIndex);
+}
+
 bool ClearGamepadSuppressionsForGame() noexcept {
     if (!activeFilterInstalled.load(std::memory_order_acquire)) {
         return false;

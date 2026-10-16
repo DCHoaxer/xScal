@@ -54,7 +54,34 @@ bool GamepadSuppressionState::Unsuppress(
     return true;
 }
 
+bool GamepadSuppressionState::SuppressAnalog(
+    std::uint32_t userIndex) noexcept {
+    if (userIndex >= analogSuppressed_.size()) {
+        return false;
+    }
+    analogSuppressed_[userIndex].store(true, std::memory_order_release);
+    return true;
+}
+
+bool GamepadSuppressionState::UnsuppressAnalog(
+    std::uint32_t userIndex) noexcept {
+    if (userIndex >= analogSuppressed_.size()) {
+        return false;
+    }
+    analogSuppressed_[userIndex].store(false, std::memory_order_release);
+    return true;
+}
+
+bool GamepadSuppressionState::IsAnalogSuppressed(
+    std::uint32_t userIndex) const noexcept {
+    return userIndex < analogSuppressed_.size() &&
+        analogSuppressed_[userIndex].load(std::memory_order_acquire);
+}
+
 void GamepadSuppressionState::Clear() noexcept {
+    for (auto& analog : analogSuppressed_) {
+        analog.store(false, std::memory_order_release);
+    }
     for (auto& mask : masks_) {
         UpdateMask(mask, [](std::uint32_t current) {
             return Pack(
@@ -65,6 +92,9 @@ void GamepadSuppressionState::Clear() noexcept {
 }
 
 void GamepadSuppressionState::Reset() noexcept {
+    for (auto& analog : analogSuppressed_) {
+        analog.store(false, std::memory_order_release);
+    }
     for (auto& masks : masks_) {
         masks.store(0, std::memory_order_release);
     }
@@ -91,6 +121,14 @@ void GamepadSuppressionState::Filter(
         Active(previous) | (Release(previous) & rawButtons));
     state.Gamepad.wButtons = static_cast<WORD>(
         rawButtons & static_cast<std::uint16_t>(~suppressed));
+    if (analogSuppressed_[userIndex].load(std::memory_order_acquire)) {
+        state.Gamepad.bLeftTrigger = 0;
+        state.Gamepad.bRightTrigger = 0;
+        state.Gamepad.sThumbLX = 0;
+        state.Gamepad.sThumbLY = 0;
+        state.Gamepad.sThumbRX = 0;
+        state.Gamepad.sThumbRY = 0;
+    }
 }
 
 std::uint16_t GamepadSuppressionState::ActiveMask(

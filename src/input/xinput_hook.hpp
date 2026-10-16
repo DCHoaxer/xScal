@@ -46,6 +46,10 @@ private:
 [[nodiscard]] bool UnsuppressGamepadButtonsForGame(
     std::uint16_t buttons,
     std::uint32_t userIndex) noexcept;
+[[nodiscard]] bool SuppressGamepadAnalogForGame(
+    std::uint32_t userIndex) noexcept;
+[[nodiscard]] bool UnsuppressGamepadAnalogForGame(
+    std::uint32_t userIndex) noexcept;
 [[nodiscard]] bool ClearGamepadSuppressionsForGame() noexcept;
 
 [[nodiscard]] DWORD WINAPI HookedXInputGetState(

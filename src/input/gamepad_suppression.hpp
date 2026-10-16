@@ -19,6 +19,12 @@ public:
     [[nodiscard]] bool Unsuppress(
         std::uint16_t buttons,
         std::uint32_t userIndex) noexcept;
+    // While analog is suppressed for a user index, Filter zeroes the triggers
+    // and both sticks. Clear and Reset also release it.
+    [[nodiscard]] bool SuppressAnalog(std::uint32_t userIndex) noexcept;
+    [[nodiscard]] bool UnsuppressAnalog(std::uint32_t userIndex) noexcept;
+    [[nodiscard]] bool IsAnalogSuppressed(
+        std::uint32_t userIndex) const noexcept;
     void Clear() noexcept;
     void Reset() noexcept;
     void Filter(std::uint32_t userIndex, XINPUT_STATE& state) noexcept;
@@ -45,6 +51,7 @@ private:
     }
 
     std::array<std::atomic<std::uint32_t>, kGamepadCount> masks_{};
+    std::array<std::atomic<bool>, kGamepadCount> analogSuppressed_{};
 };
 
 }

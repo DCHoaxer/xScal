@@ -414,6 +414,97 @@ template <KeyOperation kOperation>
     return true;
 }
 
+using GamepadAnalogOperation = bool (InputState::*)(std::uint32_t) noexcept;
+
+template <GamepadAnalogOperation kOperation>
+[[nodiscard]] bool HandleGamepadAnalogOperation(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::uint32_t userIndex{};
+    call.result->SetBoolean(
+        TryGetUnsignedArgument(
+            call, 1, XUSER_MAX_COUNT - 1, true, userIndex) &&
+        (targets.input.*kOperation)(userIndex));
+    return true;
+}
+
+[[nodiscard]] bool HandlePollGamepad(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::uint32_t userIndex{};
+    const InputState::GamepadSnapshot pad =
+        TryGetUnsignedArgument(
+            call, 1, XUSER_MAX_COUNT - 1, true, userIndex)
+        ? targets.input.PollGamepad(userIndex)
+        : InputState::GamepadSnapshot{};
+    try {
+        std::string payload{"{\"connected\":"};
+        payload.append(pad.connected ? "true" : "false");
+        payload.append(",\"lt\":");
+        payload.append(std::to_string(pad.leftTrigger));
+        payload.append(",\"rt\":");
+        payload.append(std::to_string(pad.rightTrigger));
+        payload.append(",\"lx\":");
+        payload.append(std::to_string(pad.leftX));
+        payload.append(",\"ly\":");
+        payload.append(std::to_string(pad.leftY));
+        payload.append(",\"rx\":");
+        payload.append(std::to_string(pad.rightX));
+        payload.append(",\"ry\":");
+        payload.append(std::to_string(pad.rightY));
+        payload.append(",\"buttons\":");
+        payload.append(std::to_string(pad.buttons));
+        payload.push_back('}');
+        return call.result->SetString(payload);
+    } catch (...) {
+        return false;
+    }
+}
+
+[[nodiscard]] bool HandleBeginMouseCapture(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    call.result->SetBoolean(targets.input.BeginMouseCapture());
+    return true;
+}
+
+[[nodiscard]] bool HandleEndMouseCapture(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    call.result->SetBoolean(targets.input.EndMouseCapture());
+    return true;
+}
+
+// Returned as a JSON string like the other object-shaped results.
+[[nodiscard]] bool HandlePollMouse(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    const InputState::MouseSnapshot mouse = targets.input.PollMouse();
+    const auto flag = [](bool value) { return value ? "true" : "false"; };
+    try {
+        std::string payload{"{\"dx\":"};
+        payload.append(std::to_string(mouse.dx));
+        payload.append(",\"dy\":");
+        payload.append(std::to_string(mouse.dy));
+        payload.append(",\"wheel\":");
+        payload.append(std::to_string(mouse.wheel));
+        payload.append(",\"left\":");
+        payload.append(flag(mouse.left));
+        payload.append(",\"right\":");
+        payload.append(flag(mouse.right));
+        payload.append(",\"leftPressed\":");
+        payload.append(flag(mouse.leftPressed));
+        payload.append(",\"rightPressed\":");
+        payload.append(flag(mouse.rightPressed));
+        payload.append(",\"capturing\":");
+        payload.append(flag(mouse.capturing));
+        payload.push_back('}');
+        return call.result->SetString(payload);
+    } catch (...) {
+        return false;
+    }
+}
+
 [[nodiscard]] bool HandleBeginInput(
     const ScaleformCall& call,
     const ScaleformCallbackTargets& targets) noexcept {
@@ -680,6 +771,9 @@ constexpr std::array kScaleformCallbacks{
         &HandleGamepadOperation<&InputState::AreGamepadButtonsPressed>},
     ScaleformCallbackDefinition{"Input.BeginInput", &HandleBeginInput},
     ScaleformCallbackDefinition{
+        "Input.BeginMouseCapture",
+        &HandleBeginMouseCapture},
+    ScaleformCallbackDefinition{
         "Input.ClearGamepadButtons",
         &HandleClearGamepadButtons},
     ScaleformCallbackDefinition{
@@ -691,15 +785,23 @@ constexpr std::array kScaleformCallbacks{
     ScaleformCallbackDefinition{"Input.ClearKeys", &HandleClearKeys},
     ScaleformCallbackDefinition{"Input.EndInput", &HandleEndInput},
     ScaleformCallbackDefinition{
+        "Input.EndMouseCapture",
+        &HandleEndMouseCapture},
+    ScaleformCallbackDefinition{
         "Input.IsKeyPressed",
         &HandleKeyOperation<&InputState::IsKeyPressed>},
+    ScaleformCallbackDefinition{"Input.PollGamepad", &HandlePollGamepad},
     ScaleformCallbackDefinition{"Input.PollInput", &HandlePollInput},
+    ScaleformCallbackDefinition{"Input.PollMouse", &HandlePollMouse},
     ScaleformCallbackDefinition{
         "Input.RegisterGamepadButtons",
         &HandleGamepadOperation<&InputState::RegisterGamepadButtons>},
     ScaleformCallbackDefinition{
         "Input.RegisterKey",
         &HandleKeyOperation<&InputState::RegisterKey>},
+    ScaleformCallbackDefinition{
+        "Input.SuppressGamepadAnalog",
+        &HandleGamepadAnalogOperation<&InputState::SuppressGamepadAnalog>},
     ScaleformCallbackDefinition{
         "Input.SuppressGamepadButtons",
         &HandleGamepadOperation<&InputState::SuppressGamepadButtons>},
@@ -712,6 +814,9 @@ constexpr std::array kScaleformCallbacks{
     ScaleformCallbackDefinition{
         "Input.UnregisterKey",
         &HandleKeyOperation<&InputState::UnregisterKey>},
+    ScaleformCallbackDefinition{
+        "Input.UnsuppressGamepadAnalog",
+        &HandleGamepadAnalogOperation<&InputState::UnsuppressGamepadAnalog>},
     ScaleformCallbackDefinition{
         "Input.UnsuppressGamepadButtons",
         &HandleGamepadOperation<&InputState::UnsuppressGamepadButtons>},

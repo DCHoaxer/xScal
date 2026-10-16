@@ -204,13 +204,22 @@ LRESULT CALLBACK SubclassInstallHook(
 
 [[nodiscard]] bool QueryGamepadState(
     std::uint32_t userIndex,
-    std::uint16_t& buttons) noexcept {
+    InputState::GamepadSnapshot& snapshot) noexcept {
+    // The hook replaces the game's import slot, so this call reads the
+    // physical state.
+    snapshot = {};
     XINPUT_STATE state{};
     if (::XInputGetState(userIndex, &state) != ERROR_SUCCESS) {
-        buttons = 0;
         return false;
     }
-    buttons = state.Gamepad.wButtons;
+    snapshot.buttons = state.Gamepad.wButtons;
+    snapshot.leftTrigger = state.Gamepad.bLeftTrigger;
+    snapshot.rightTrigger = state.Gamepad.bRightTrigger;
+    snapshot.leftX = state.Gamepad.sThumbLX;
+    snapshot.leftY = state.Gamepad.sThumbLY;
+    snapshot.rightX = state.Gamepad.sThumbRX;
+    snapshot.rightY = state.Gamepad.sThumbRY;
+    snapshot.connected = true;
     return true;
 }
 
@@ -224,7 +233,9 @@ InputState::InputState() noexcept
           &SuppressGamepadButtonsForGame,
           &UnsuppressGamepadButtonsForGame,
           &ClearGamepadSuppressionsForGame,
-          &QueryTextInputWindow) {}
+          &QueryTextInputWindow,
+          &SuppressGamepadAnalogForGame,
+          &UnsuppressGamepadAnalogForGame) {}
 
 InputState::~InputState() {
     std::scoped_lock lock{mutex_};
@@ -238,14 +249,18 @@ InputState::InputState(
     GamepadButtonsCommand suppressGamepadButtons,
     GamepadButtonsCommand unsuppressGamepadButtons,
     ClearGamepadSuppressionsCommand clearGamepadSuppressions,
-    TextInputWindowQuery textInputWindowQuery) noexcept
+    TextInputWindowQuery textInputWindowQuery,
+    GamepadAnalogCommand suppressGamepadAnalog,
+    GamepadAnalogCommand unsuppressGamepadAnalog) noexcept
     : keyStateQuery_{keyStateQuery},
       foregroundProcessQuery_{foregroundProcessQuery},
       gamepadStateQuery_{gamepadStateQuery},
       suppressGamepadButtons_{suppressGamepadButtons},
       unsuppressGamepadButtons_{unsuppressGamepadButtons},
       clearGamepadSuppressions_{clearGamepadSuppressions},
-      textInputWindowQuery_{textInputWindowQuery} {}
+      textInputWindowQuery_{textInputWindowQuery},
+      suppressGamepadAnalog_{suppressGamepadAnalog},
+      unsuppressGamepadAnalog_{unsuppressGamepadAnalog} {}
 
 bool InputState::RegisterKey(std::uint8_t key) noexcept {
     std::scoped_lock lock{mutex_};
@@ -325,11 +340,32 @@ bool InputState::AreGamepadButtonsPressed(
         }
     }
 
-    std::uint16_t pressedButtons{};
+    GamepadSnapshot snapshot;
     return foregroundProcessQuery_ != nullptr && gamepadStateQuery_ != nullptr &&
         foregroundProcessQuery_() &&
-        gamepadStateQuery_(userIndex, pressedButtons) &&
-        (pressedButtons & buttons) == buttons;
+        gamepadStateQuery_(userIndex, snapshot) &&
+        (snapshot.buttons & buttons) == buttons;
+}
+
+InputState::GamepadSnapshot InputState::PollGamepad(
+    std::uint32_t userIndex) noexcept {
+    GamepadSnapshot snapshot;
+    if (userIndex >= kGamepadCount || foregroundProcessQuery_ == nullptr ||
+        gamepadStateQuery_ == nullptr || !foregroundProcessQuery_() ||
+        !gamepadStateQuery_(userIndex, snapshot)) {
+        return {};
+    }
+    return snapshot;
+}
+
+bool InputState::SuppressGamepadAnalog(std::uint32_t userIndex) noexcept {
+    return suppressGamepadAnalog_ != nullptr &&
+        suppressGamepadAnalog_(userIndex);
+}
+
+bool InputState::UnsuppressGamepadAnalog(std::uint32_t userIndex) noexcept {
+    return unsuppressGamepadAnalog_ != nullptr &&
+        unsuppressGamepadAnalog_(userIndex);
 }
 
 bool InputState::SuppressGamepadButtons(
@@ -359,6 +395,11 @@ bool InputState::SuppressKey(std::uint8_t key) noexcept {
     // The key stays recorded when the install fails, so the next SuppressKey
     // call retries the install and the key takes effect once it succeeds.
     suppressedKeys_.set(key);
+    return InstallSubclassIfMissing();
+}
+
+// Called with mutex_ held.
+bool InputState::InstallSubclassIfMissing() noexcept {
     TakeSubclassInstallResult(false);
     if (subclassWindow_ != nullptr || subclassInstallPending_) {
         return true;
@@ -368,6 +409,41 @@ bool InputState::SuppressKey(std::uint8_t key) noexcept {
     }
     void* const window = textInputWindowQuery_();
     return window != nullptr && StartSubclassInstall(window);
+}
+
+bool InputState::BeginMouseCapture() noexcept {
+    std::scoped_lock lock{mutex_};
+    // Like SuppressKey, the capture stays set when the install fails, and the
+    // next call retries the install.
+    mouse_ = {};
+    mouseCapturing_ = true;
+    if (keyStateQuery_ != nullptr) {
+        mouse_.left = keyStateQuery_(VK_LBUTTON);
+        mouse_.right = keyStateQuery_(VK_RBUTTON);
+    }
+    return InstallSubclassIfMissing();
+}
+
+InputState::MouseSnapshot InputState::PollMouse() noexcept {
+    std::scoped_lock lock{mutex_};
+    if (!mouseCapturing_) {
+        return {};
+    }
+    MouseSnapshot snapshot = mouse_;
+    snapshot.capturing = true;
+    mouse_.dx = 0;
+    mouse_.dy = 0;
+    mouse_.wheel = 0;
+    mouse_.leftPressed = false;
+    mouse_.rightPressed = false;
+    return snapshot;
+}
+
+bool InputState::EndMouseCapture() noexcept {
+    std::scoped_lock lock{mutex_};
+    mouseCapturing_ = false;
+    mouse_ = {};
+    return true;
 }
 
 bool InputState::UnsuppressKey(std::uint8_t key) noexcept {
@@ -558,6 +634,9 @@ bool InputState::FilterKeyboardMessage(
         consumedDownKeys_.reset(key);
         return consumed;
     }
+    if (message == WM_INPUT && mouseCapturing_ && FilterMouseRawInput(lParam)) {
+        return true;
+    }
     if (textInputSession_ == 0) {
         return FilterSuppressedKey(message, wParam, lParam);
     }
@@ -722,6 +801,57 @@ bool InputState::FilterSuppressedRawInput(std::intptr_t lParam) noexcept {
         return false;
     }
     consumedRawDownKeys_.set(key);
+    return true;
+}
+
+// Called with mutex_ held while the mouse is captured. Mouse records are
+// added to the totals only while Fallout's process has the foreground; in the
+// background they reach the game's window procedure unchanged so alt-tab
+// behaves normally.
+bool InputState::FilterMouseRawInput(std::intptr_t lParam) noexcept {
+    if (lParam == 0) {
+        return false;
+    }
+    RAWINPUT record{};
+    UINT size = sizeof(record);
+    if (::GetRawInputData(
+            reinterpret_cast<HRAWINPUT>(lParam),
+            RID_INPUT,
+            &record,
+            &size,
+            sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1) ||
+        record.header.dwType != RIM_TYPEMOUSE) {
+        return false;
+    }
+    if (foregroundProcessQuery_ == nullptr || !foregroundProcessQuery_()) {
+        // Button releases during alt-tab would be missed, so drop the state.
+        mouse_.left = false;
+        mouse_.right = false;
+        return false;
+    }
+    const RAWMOUSE& raw = record.data.mouse;
+    if ((raw.usFlags & MOUSE_MOVE_ABSOLUTE) == 0) {
+        mouse_.dx += raw.lLastX;
+        mouse_.dy += raw.lLastY;
+    }
+    const USHORT buttons = raw.usButtonFlags;
+    if ((buttons & RI_MOUSE_LEFT_BUTTON_DOWN) != 0) {
+        mouse_.left = true;
+        mouse_.leftPressed = true;
+    }
+    if ((buttons & RI_MOUSE_LEFT_BUTTON_UP) != 0) {
+        mouse_.left = false;
+    }
+    if ((buttons & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0) {
+        mouse_.right = true;
+        mouse_.rightPressed = true;
+    }
+    if ((buttons & RI_MOUSE_RIGHT_BUTTON_UP) != 0) {
+        mouse_.right = false;
+    }
+    if ((buttons & RI_MOUSE_WHEEL) != 0) {
+        mouse_.wheel += static_cast<SHORT>(raw.usButtonData);
+    }
     return true;
 }
 
