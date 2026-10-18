@@ -24,9 +24,6 @@ struct NativeActiveEffectProfile final {
     std::uintptr_t localPlayerPrimaryVtable;
     std::uintptr_t localPlayerMagicTargetVtable;
     std::size_t getActiveEffectsVtableOffset;
-    // Never read from the Address Library. The acquire is repeated inline (see
-    // TryAcquireActiveEffectsReadLockUnchecked), so this stays zero.
-    std::uintptr_t acquireActiveEffectsReadLock;
     std::uintptr_t releaseActiveEffectsReadLock;
 
     std::uintptr_t isEligible;
@@ -70,9 +67,6 @@ struct NativeEnemyMeterProfile final {
 struct NativeTimeDataProfile final {
     std::uintptr_t calendarSingletonGlobal;
     std::uintptr_t tesGlobalVtable;
-    // Never read from the Address Library; the game hour is read from memory
-    // directly. This stays zero.
-    std::uintptr_t gameHourGetter;
 
     std::size_t calendarGameHourOffset;
     std::size_t tesGlobalValueOffset;
