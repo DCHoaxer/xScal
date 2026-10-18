@@ -4,6 +4,7 @@
 #include <yyjson.h>
 
 #include "address/address_library.hpp"
+#include "address/address_library_key.hpp"
 #include "api/internal/enemy_meter_data.hpp"
 #include "api/mod_storage.hpp"
 #include "api/scaleform_callbacks.hpp"
@@ -17,6 +18,8 @@
 #include <array>
 #include <cstddef>
 #include <cwchar>
+#include <memory>
+#include <new>
 #include <vector>
 
 namespace sf {
@@ -114,30 +117,75 @@ void ShowRuntimeVersionError(
 // Displays a message box indicating that the Address Library is missing or invalid. 
 void ShowAddressLibraryError(
     const RuntimeProcessPlatform& platform,
-    const config::RuntimeVersion& found,
-    const wchar_t* problem) noexcept {
+    const config::RuntimeVersion& found) noexcept {
     const auto runtimeText = FormatRuntimeVersion(found);
     std::array<wchar_t, 1024> message{};
     std::swprintf(message.data(), message.size(),
-        L"%ls\n\n"
+        L"Oh no. The Address Library has flatlined.\n\n"
         L"Fallout 76 runtime: %hs\n\n"
+        L"What went wrong?\n"
+        L"xScal tried to read the Address Library and immediately regretted being born. "
         L"Missing or invalid Address Library for this runtime.\n\n"
         L"Wait for xscal to automatically download it if the new database is available:\n"
         L"If not, you can wait, or manually download the latest Address Library from NexusMods (if published):\n"
-        L"https://www.nexusmods.com/fallout76/mods/4298/\n"
-        L"Note that I am publishing the adress library manually, so it may take some time after update for the new version to be available.\n\n"
-        L"xScal features will be unavailable for this session.",
-        problem,
+        L"https://www.nexusmods.com/fallout76/mods/4298/\n\n"
+        L"Note that I am publishing the adress library manually, so it may take some time "
+        L"after update for the new version to be available.\n\n"
+        L"xScal features are now taking an unpaid vacation for this session.",
         runtimeText.data());
-    platform.messageBox(nullptr, message.data(), L"xScal", MB_OK | MB_ICONEXCLAMATION);
+    platform.messageBox(
+        nullptr,
+        message.data(),
+        L"xScal",
+        MB_OK | MB_ICONEXCLAMATION);
 }
 
-// Updates the Address Library for the given runtime if a new version is available.
-[[nodiscard]] AddressLibraryUpdateStatus UpdateMissingAddressLibrary(
+// The file an installed database was published as.
+struct InstalledFile final {
+    address::format::XScalVersion release;
+    std::uint32_t revision;
+};
+
+[[nodiscard]] std::uint64_t CurrentFileTime(
+    const RuntimeProcessPlatform& platform) noexcept {
+    FILETIME now{};
+    platform.getSystemTimeAsFileTime(&now);
+    return (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) |
+        now.dwLowDateTime;
+}
+
+// Logs why a database file was rejected, with the detail the status carries.
+void LogAddressLibraryRejection(
+    const address::Library& library,
+    address::LoadStatus status,
+    const address::ExecutableIdentity& executable) noexcept {
+    if (status == address::LoadStatus::BadSignature) {
+        DiagnosticLogFormat(
+            "Address Library: signature check failed (%s)",
+            plugins::signing::DescribeCheck(library.LastSignatureCheck()));
+    } else if (status == address::LoadStatus::WrongExecutable) {
+        const auto expected = library.FileExecutable();
+        DiagnosticLogFormat(
+            "Address Library: file is for another executable build "
+            "(file timestamp 0x%08X size 0x%08X, running timestamp 0x%08X size 0x%08X)",
+            expected.timeDateStamp,
+            expected.imageSize,
+            executable.timeDateStamp,
+            executable.imageSize);
+    }
+}
+
+// Downloads the server's database for this runtime and writes it after the
+// user agrees. With installed set, the download is offered only when its
+// release and revision are newer than the installed file's and the user has
+// not declined that file.
+[[nodiscard]] AddressLibraryUpdateStatus OfferAddressLibraryDownload(
     const RuntimeProcessPlatform& platform,
     TargetKind target,
     const config::RuntimeVersion& runtime,
-    std::uintptr_t moduleBase) noexcept {
+    const address::ExecutableIdentity& executable,
+    std::uintptr_t moduleBase,
+    const InstalledFile* installed) noexcept {
     const auto runtimeText = FormatRuntimeVersion(runtime);
     std::string contents;
     if (!platform.downloadAddressLibrary(target, runtime, contents)) {
@@ -149,30 +197,79 @@ void ShowAddressLibraryError(
     }
 
     address::Library downloaded;
-    if (!downloaded.Parse(contents, target, runtime, moduleBase)) {
+    const auto parseStatus = downloaded.Parse(
+        contents, target, runtime, executable, moduleBase);
+    if (parseStatus != address::LoadStatus::Loaded) {
         DiagnosticLogFormat(
             "Address Library: downloaded file is invalid for runtime %s (%s)",
             runtimeText.data(),
             TargetKindName(target));
+        LogAddressLibraryRejection(downloaded, parseStatus, executable);
         return AddressLibraryUpdateStatus::Unavailable;
     }
+    const auto release = downloaded.ReleaseXScalVersion();
+    const auto revision = downloaded.Revision();
+    if (installed != nullptr) {
+        if (!address::format::IsFileNewer(
+                release, revision, installed->release, installed->revision)) {
+            DiagnosticLogFormat(
+                "Address Library: server has no newer file for runtime %s (%s)",
+                runtimeText.data(),
+                TargetKindName(target));
+            return AddressLibraryUpdateStatus::Unavailable;
+        }
+        if (address::IsUpdateDeclined(target, runtime, release, revision)) {
+            DiagnosticLogFormat(
+                "Address Library: server file %hhu.%hhu.%hhu revision %u was declined earlier",
+                release.major,
+                release.minor,
+                release.patch,
+                revision);
+            return AddressLibraryUpdateStatus::Unavailable;
+        }
+    }
 
-    std::array<wchar_t, 768> message{};
+    std::array<wchar_t, 160> versions{};
+    if (installed != nullptr) {
+        std::swprintf(
+            versions.data(),
+            versions.size(),
+            L"Installed file: xScal %hhu.%hhu.%hhu, revision %u\n"
+            L"New file: xScal %hhu.%hhu.%hhu, revision %u\n\n",
+            installed->release.major,
+            installed->release.minor,
+            installed->release.patch,
+            installed->revision,
+            release.major,
+            release.minor,
+            release.patch,
+            revision);
+    }
+    std::array<wchar_t, 1024> message{};
     std::swprintf(
         message.data(),
         message.size(),
         L"A new xScal Address Library was found for Fallout 76 "
         L"%hs (%hs).\n\n"
-        L"It is required for xScal to work with this version of the game.\n\n"
+        L"%ls"
+        L"The new file is used after the next restart of Fallout 76.\n\n"
         L"Do you want to install it now?",
         runtimeText.data(),
-        TargetKindName(target));
+        TargetKindName(target),
+        versions.data());
     if (platform.messageBox(
             nullptr,
             message.data(),
             L"xScal Address Library",
             MB_YESNO | MB_ICONINFORMATION) != IDYES) {
         DiagnosticLog("Address Library: installation declined");
+        if (installed != nullptr &&
+            !address::StoreDeclinedUpdate(target, runtime, release, revision)) {
+            DiagnosticLogFormat(
+                "Address Library: decline marker could not be written "
+                "(Windows error %lu)",
+                ::GetLastError());
+        }
         return AddressLibraryUpdateStatus::Declined;
     }
     if (!address::StoreAddressLibrary(target, runtime, contents)) {
@@ -186,13 +283,166 @@ void ShowAddressLibraryError(
         "Address Library: installed runtime %s (%s)",
         runtimeText.data(),
         TargetKindName(target));
+    return AddressLibraryUpdateStatus::Installed;
+}
+
+void ShowRestartNotice(const RuntimeProcessPlatform& platform) noexcept {
     platform.messageBox(
         nullptr,
         L"The new xScal Address Library was installed.\n\n"
         L"Restart Fallout 76 manually to activate xScal for this game version.",
         L"xScal Address Library",
         MB_OK | MB_ICONINFORMATION);
-    return AddressLibraryUpdateStatus::Installed;
+}
+
+// Offers the server's database when none is installed for this runtime or
+// the installed file cannot be used.
+[[nodiscard]] AddressLibraryUpdateStatus UpdateMissingAddressLibrary(
+    const RuntimeProcessPlatform& platform,
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    const address::ExecutableIdentity& executable,
+    std::uintptr_t moduleBase) noexcept {
+    const auto status = OfferAddressLibraryDownload(
+        platform,
+        target,
+        runtime,
+        executable,
+        moduleBase,
+        nullptr);
+    if (status == AddressLibraryUpdateStatus::Installed) {
+        ShowRestartNotice(platform);
+    }
+    return status;
+}
+
+// Asks the server for a newer database than the installed one, at most once
+// per 24 hours, and right away after xScal itself was updated. A newly
+// installed file is used after the next restart.
+[[nodiscard]] AddressLibraryUpdateStatus UpdateInstalledAddressLibrary(
+    const RuntimeProcessPlatform& platform,
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    const address::ExecutableIdentity& executable,
+    std::uintptr_t moduleBase,
+    const InstalledFile& installed) noexcept {
+    const std::uint64_t now = CurrentFileTime(platform);
+    if (!address::IsUpdateCheckDue(target, runtime, now)) {
+        const auto runtimeText = FormatRuntimeVersion(runtime);
+        DiagnosticLogFormat(
+            "Address Library: update check skipped for runtime %s (%s), "
+            "last check was less than 24 hours ago",
+            runtimeText.data(),
+            TargetKindName(target));
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+
+    const auto status = OfferAddressLibraryDownload(
+        platform,
+        target,
+        runtime,
+        executable,
+        moduleBase,
+        &installed);
+    if (!address::StoreUpdateCheck(target, runtime, now)) {
+        DiagnosticLogFormat(
+            "Address Library: update check marker could not be written "
+            "(Windows error %lu)",
+            ::GetLastError());
+    }
+    if (status == AddressLibraryUpdateStatus::Installed) {
+        ShowRestartNotice(platform);
+    }
+    return status;
+}
+
+// Everything the background thread needs, copied at startup. The thread
+// does not touch activeAddressLibrary.
+struct BackgroundJob final {
+    RuntimeProcessPlatform platform;
+    TargetKind target;
+    config::RuntimeVersion runtime;
+    address::ExecutableIdentity executable;
+    std::uintptr_t moduleBase;
+    bool autoUpdate;
+    bool versionUnreadable;
+    address::LoadStatus status;
+    InstalledFile installed;
+    // False when the file loaded and has every ID.
+    bool showError;
+};
+
+// Runs on the background thread: the error boxes, the download offers and
+// the restart notice.
+void RunBackgroundJob(void* context) noexcept {
+    std::unique_ptr<BackgroundJob> job{static_cast<BackgroundJob*>(context)};
+    if (job->versionUnreadable) {
+        ShowRuntimeVersionError(job->platform);
+        return;
+    }
+    const bool fileMissing = job->status == address::LoadStatus::Missing;
+    const bool fileUnusable =
+        fileMissing ||
+        job->status == address::LoadStatus::Invalid ||
+        job->status == address::LoadStatus::BadSignature ||
+        job->status == address::LoadStatus::WrongExecutable;
+    if (job->autoUpdate) {
+        auto updateStatus = AddressLibraryUpdateStatus::Unavailable;
+        if (fileUnusable) {
+            updateStatus = UpdateMissingAddressLibrary(
+                job->platform, job->target, job->runtime, job->executable,
+                job->moduleBase);
+            if (updateStatus == AddressLibraryUpdateStatus::Declined && fileMissing) {
+                return;
+            }
+        } else if (job->status == address::LoadStatus::Loaded) {
+            updateStatus = UpdateInstalledAddressLibrary(
+                job->platform, job->target, job->runtime, job->executable,
+                job->moduleBase, job->installed);
+        }
+        if (updateStatus == AddressLibraryUpdateStatus::Installed) {
+            return;
+        }
+    }
+    if (job->showError) {
+        ShowAddressLibraryError(job->platform, job->runtime);
+    }
+}
+
+// Starts the background thread for job. Takes ownership of job.
+void StartBackgroundJob(
+    const RuntimeProcessPlatform& platform,
+    std::unique_ptr<BackgroundJob> job) noexcept {
+    if (!platform.runInBackground(&RunBackgroundJob, job.get())) {
+        DiagnosticLog("Address Library: update thread could not be started");
+        return;
+    }
+    (void)job.release();
+}
+
+bool RunOnNewThread(void (*work)(void* context) noexcept, void* context) noexcept {
+    struct Start final {
+        void (*work)(void*) noexcept;
+        void* context;
+    };
+    auto* const start = new (std::nothrow) Start{work, context};
+    if (start == nullptr) {
+        return false;
+    }
+    const HANDLE thread = ::CreateThread(
+        nullptr, 0,
+        [](LPVOID parameter) -> DWORD {
+            std::unique_ptr<Start> start{static_cast<Start*>(parameter)};
+            start->work(start->context);
+            return 0;
+        },
+        start, 0, nullptr);
+    if (thread == nullptr) {
+        delete start;
+        return false;
+    }
+    (void)::CloseHandle(thread);
+    return true;
 }
 }
 
@@ -202,6 +452,9 @@ RuntimeProcessPlatform SystemRuntimeProcessPlatform() noexcept {
         &::GetModuleFileNameW, &::GetModuleHandleW,
         &ReadSystemRuntimeVersion, &::MessageBoxW,
         &address::DownloadAddressLibrary,
+        &address::ReadExecutableIdentity,
+        &::GetSystemTimeAsFileTime,
+        &RunOnNewThread,
     };
 }
 
@@ -290,7 +543,10 @@ VtableHookStatus InitializeCurrentProcess(
     // validate platform
     if (platform.getModuleFileName == nullptr || platform.getModuleHandle == nullptr ||
         platform.readRuntimeVersion == nullptr || platform.messageBox == nullptr ||
-        platform.downloadAddressLibrary == nullptr) {
+        platform.downloadAddressLibrary == nullptr ||
+        platform.readExecutableIdentity == nullptr ||
+        platform.getSystemTimeAsFileTime == nullptr ||
+        platform.runInBackground == nullptr) {
         return VtableHookStatus::InvalidPlatform;
     }
 
@@ -314,54 +570,61 @@ VtableHookStatus InitializeCurrentProcess(
     const auto base = reinterpret_cast<std::uintptr_t>(module);
     config::RuntimeVersion found{};
 
+    auto job = std::make_unique<BackgroundJob>();
+    job->platform = platform;
+    job->target = target->kind;
+    job->moduleBase = base;
+    job->autoUpdate = config::GetRuntimeConfig().addressLibrary.autoUpdate;
+
     if (!platform.readRuntimeVersion(path.data(), found)) {
         LogRuntimeConfiguration(*target, base, nullptr);
-        ShowRuntimeVersionError(platform);
+        job->versionUnreadable = true;
+        StartBackgroundJob(platform, std::move(job));
         return VtableHookStatus::RuntimeVersionUnavailable;
     }
+    address::ExecutableIdentity executable{};
+    if (!platform.readExecutableIdentity(base, executable)) {
+        LogRuntimeConfiguration(*target, base, &found);
+        DiagnosticLog("Address Library: could not read the executable's PE headers");
+        return VtableHookStatus::InvalidArgument;
+    }
     plugins::SetAddressLibrary(nullptr);
-    auto addressStatus = activeAddressLibrary.Load(
-        target->kind, found, base);
-    if (addressStatus == address::LoadStatus::Missing &&
-        config::GetRuntimeConfig().addressLibrary.autoUpdate) {
-        const auto updateStatus = UpdateMissingAddressLibrary(
-            platform, target->kind, found, base);
-        if (updateStatus == AddressLibraryUpdateStatus::Declined) {
-            return VtableHookStatus::AddressLibraryMissing;
-        }
-        if (updateStatus == AddressLibraryUpdateStatus::Installed) {
-            return VtableHookStatus::AddressLibraryRestartRequired;
-        }
+    const auto addressStatus = activeAddressLibrary.Load(
+        target->kind, found, executable, base);
+    job->runtime = found;
+    job->executable = executable;
+    job->status = addressStatus;
+    if (addressStatus == address::LoadStatus::Loaded) {
+        job->installed = {
+            activeAddressLibrary.ReleaseXScalVersion(),
+            activeAddressLibrary.Revision()};
     }
     if (addressStatus != address::LoadStatus::Loaded) {
         LogRuntimeConfiguration(*target, base, &found);
         const char* statusText = "invalid database";
-        const wchar_t* problem =
-            L"The xScal Address Library file is invalid or corrupt.";
+        if (addressStatus == address::LoadStatus::Invalid &&
+            !address::kHasLibraryKey) {
+            DiagnosticLog(
+                "Address Library: this build has no Address Library key, so it cannot read any database");
+        }
         VtableHookStatus failure = VtableHookStatus::AddressLibraryInvalid;
-        std::array<wchar_t, 192> versionProblem{};
         if (addressStatus == address::LoadStatus::Missing) {
             statusText = "file not found";
-            problem = L"No xScal Address Library is installed for this runtime.";
             failure = VtableHookStatus::AddressLibraryMissing;
+        } else if (addressStatus == address::LoadStatus::BadSignature) {
+            statusText = "signature check failed";
+            LogAddressLibraryRejection(activeAddressLibrary, addressStatus, executable);
+        } else if (addressStatus == address::LoadStatus::WrongExecutable) {
+            statusText = "file is for another executable build";
+            LogAddressLibraryRejection(activeAddressLibrary, addressStatus, executable);
         } else if (addressStatus == address::LoadStatus::ReadFailed) {
             statusText = "file could not be read";
-            problem = L"The xScal Address Library file could not be read.";
         } else if (addressStatus == address::LoadStatus::RequiresNewerXScal) {
             statusText = "newer xScal version required";
-            problem = versionProblem.data();
             failure = VtableHookStatus::AddressLibraryRequiresNewerXScal;
             const auto required = activeAddressLibrary.RequiredXScalVersion();
             DiagnosticLogFormat(
                 "Address Library requires xScal %hhu.%hhu.%hhu or newer",
-                required.major,
-                required.minor,
-                required.patch);
-            std::swprintf(
-                versionProblem.data(),
-                versionProblem.size(),
-                L"This Address Library requires xScal %hhu.%hhu.%hhu or newer. "
-                L"Update xScal before using this file.",
                 required.major,
                 required.minor,
                 required.patch);
@@ -372,7 +635,8 @@ VtableHookStatus InitializeCurrentProcess(
             statusText,
             foundText.data(),
             TargetKindName(target->kind));
-        ShowAddressLibraryError(platform, found, problem);
+        job->showError = true;
+        StartBackgroundJob(platform, std::move(job));
         return failure;
     }
 
@@ -382,10 +646,8 @@ VtableHookStatus InitializeCurrentProcess(
         !ReadTargetProfile(*target, found, *addressInterface, profile)) {
         LogRuntimeConfiguration(*target, base, &found);
         DiagnosticLog("Address Library: required xScal IDs are missing");
-        ShowAddressLibraryError(
-            platform,
-            found,
-            L"The xScal Address Library is missing required xScal IDs.");
+        job->showError = true;
+        StartBackgroundJob(platform, std::move(job));
         return VtableHookStatus::AddressLibraryIncomplete;
     }
     LogRuntimeConfiguration(*target, base, &found, &profile);
@@ -396,6 +658,7 @@ VtableHookStatus InitializeCurrentProcess(
         plugins::SetScaleformMovieInterface(
             movieapi::Interface(), movieapi::InterfaceV1());
     }
+    StartBackgroundJob(platform, std::move(job));
     return status;
 }
 }
