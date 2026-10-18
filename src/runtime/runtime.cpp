@@ -1,5 +1,6 @@
 #include "runtime/runtime.hpp"
 
+#include <libdeflate.h>
 #include <yyjson.h>
 
 #include "address/address_library.hpp"
@@ -7,6 +8,7 @@
 #include "api/mod_storage.hpp"
 #include "api/scaleform_callbacks.hpp"
 #include "api/scaleform_movie_interface.hpp"
+#include "archive/archive_stream_hook.hpp"
 #include "chat/chat_interface.hpp"
 #include "config/config.h"
 #include "platform/diagnostics.hpp"
@@ -75,6 +77,7 @@ void LogRuntimeConfiguration(
         static_cast<unsigned int>(config::kXScalVersion.minor),
         static_cast<unsigned int>(config::kXScalVersion.patch));
     DiagnosticLog("Uses yyjson v" YYJSON_VERSION_STRING " by @ibireme");
+    DiagnosticLog("Uses libdeflate v" LIBDEFLATE_VERSION_STRING " by Eric Biggers");
     if (version != nullptr) {
         DiagnosticLogFormat(
             "imagebase = %p runtime = %s",
@@ -265,6 +268,7 @@ VtableHookStatus Runtime::Initialize(
             statsEffectsInstalled ? "Enabled" : "Disabled",
             timeDataInstalled ? "Enabled" : "Disabled",
             playerMapPositionInstalled ? "Enabled" : "Disabled");
+        (void)archive::InstallArchiveStreamHook(profile.archiveStream, moduleBase);
         DiagnosticLogFormat(
             "xScal Modules: {xScalPriority: %s}",
             config::GetRuntimeConfig().xscalPriority.enabled

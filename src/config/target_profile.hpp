@@ -100,6 +100,38 @@ struct NativePlayerMapPositionProfile final {
         const NativePlayerMapPositionProfile&) const noexcept = default;
 };
 
+// Exact-build data for the libdeflate archive decompression. All values or
+// none.
+struct ArchiveStreamProfile final {
+    std::uintptr_t readerStreamVtable;
+    std::uintptr_t read;
+    std::uintptr_t seek;
+    std::uintptr_t close;
+    std::size_t readSlot;
+    std::size_t seekSlot;
+    std::size_t closeSlot;
+    std::size_t backingOffset;
+    std::size_t stateOffset;
+    std::size_t entryOffsetOffset;
+    std::size_t packedSizeOffset;
+    std::size_t unpackedSizeOffset;
+    std::size_t flagsOffset;
+    std::size_t zlibFlag;
+    std::size_t unsupportedFlags;
+    std::size_t backingErrorOffset;
+    std::size_t backingReadSlot;
+    std::size_t decodedWaitingOffset;
+    std::size_t packedUnfedOffset;
+    std::size_t packedUnrequestedOffset;
+    std::size_t issueIndexOffset;
+    std::size_t waitIndexOffset;
+    std::size_t deliveredOffset;
+    std::size_t unsupportedResult;
+
+    [[nodiscard]] constexpr bool operator==(
+        const ArchiveStreamProfile&) const noexcept = default;
+};
+
 struct DataManagerProfile final {
     NativeActiveEffectProfile pipBoyStatsEffects;
     NativeEnemyMeterProfile enemyMeter;
@@ -145,6 +177,8 @@ struct TargetProfile final {
     // ObjectInterface::Invoke. Zero when the Address Library has no record.
     std::uintptr_t invokeOffset;
     config::DataManagerProfile dataManager;
+    // Zero when the Address Library has no archive stream records.
+    config::ArchiveStreamProfile archiveStream;
     bool pipBoyStatsEffectsEnabled;
 
     [[nodiscard]] constexpr bool operator==(
