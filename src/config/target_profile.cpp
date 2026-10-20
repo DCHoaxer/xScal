@@ -115,6 +115,67 @@ void ReadTimeDataProfile(
     }
 }
 
+void ReadArchiveStreamProfile(
+    const XScalAddressLibraryV1& addresses,
+    config::ArchiveStreamProfile& archiveStream) noexcept {
+    archiveStream = {};
+    config::ArchiveStreamProfile result{};
+    const bool complete =
+        ReadRva(addresses, XSCAL_ADDRESS_ARCHIVE_READER_STREAM_VTABLE, result.readerStreamVtable) &&
+        ReadRva(addresses, XSCAL_ADDRESS_ARCHIVE_READER_STREAM_READ, result.read) &&
+        ReadRva(addresses, XSCAL_ADDRESS_ARCHIVE_READER_STREAM_SEEK, result.seek) &&
+        ReadRva(addresses, XSCAL_ADDRESS_ARCHIVE_READER_STREAM_CLOSE, result.close) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_READ_SLOT, result.readSlot) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_SEEK_SLOT, result.seekSlot) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_CLOSE_SLOT, result.closeSlot) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_BACKING_OFFSET, result.backingOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_STATE_OFFSET, result.stateOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_ENTRY_OFFSET_OFFSET, result.entryOffsetOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_PACKED_SIZE_OFFSET, result.packedSizeOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_UNPACKED_SIZE_OFFSET, result.unpackedSizeOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_FLAGS_OFFSET, result.flagsOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_ZLIB_FLAG, result.zlibFlag) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_UNSUPPORTED_FLAGS, result.unsupportedFlags) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_BACKING_ERROR_OFFSET, result.backingErrorOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_BACKING_READ_SLOT, result.backingReadSlot) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STATE_DECODED_WAITING_OFFSET, result.decodedWaitingOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STATE_PACKED_UNFED_OFFSET, result.packedUnfedOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STATE_PACKED_UNREQUESTED_OFFSET, result.packedUnrequestedOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STATE_ISSUE_INDEX_OFFSET, result.issueIndexOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STATE_WAIT_INDEX_OFFSET, result.waitIndexOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STATE_DELIVERED_OFFSET, result.deliveredOffset) &&
+        ReadConstant(addresses, XSCAL_CONSTANT_ARCHIVE_STREAM_UNSUPPORTED_RESULT, result.unsupportedResult);
+    // A database for a build whose layout was not verified carries the
+    // constants with value 0.
+    if (complete &&
+        result.readerStreamVtable != 0 &&
+        result.read != 0 &&
+        result.seek != 0 &&
+        result.close != 0 &&
+        result.readSlot != 0 &&
+        result.seekSlot != 0 &&
+        result.closeSlot != 0 &&
+        result.backingOffset != 0 &&
+        result.stateOffset != 0 &&
+        result.entryOffsetOffset != 0 &&
+        result.packedSizeOffset != 0 &&
+        result.unpackedSizeOffset != 0 &&
+        result.flagsOffset != 0 &&
+        result.zlibFlag != 0 &&
+        result.unsupportedFlags != 0 &&
+        result.backingErrorOffset != 0 &&
+        result.backingReadSlot != 0 &&
+        result.decodedWaitingOffset != 0 &&
+        result.packedUnfedOffset != 0 &&
+        result.packedUnrequestedOffset != 0 &&
+        result.issueIndexOffset != 0 &&
+        result.waitIndexOffset != 0 &&
+        result.deliveredOffset != 0 &&
+        result.unsupportedResult != 0) {
+        archiveStream = result;
+    }
+}
+
 void ReadPlayerMapPositionProfile(
     const XScalAddressLibraryV1& addresses,
     config::NativePlayerMapPositionProfile& position) noexcept {
@@ -196,6 +257,7 @@ bool ReadTargetProfile(
     ReadEnemyMeterProfile(addresses, result.dataManager.enemyMeter);
     ReadTimeDataProfile(addresses, result.dataManager.timeData);
     ReadPlayerMapPositionProfile(addresses, result.dataManager.playerMapPosition);
+    ReadArchiveStreamProfile(addresses, result.archiveStream);
 
     std::size_t statsEffectsEnabled{};
     result.pipBoyStatsEffectsEnabled =

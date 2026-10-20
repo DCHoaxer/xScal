@@ -1,5 +1,6 @@
 #pragma once
 
+#include "address/address_library.hpp"
 #include "api/file_command_service.hpp"
 #include "api/scaleform_callbacks.hpp"
 #include "chat/chat_session.hpp"
@@ -27,11 +28,24 @@ struct RuntimeProcessPlatform final {
         const config::RuntimeVersion& runtime,
         std::string& contents) noexcept;
 
+    using ReadExecutableIdentityFn = bool(*)(
+        std::uintptr_t moduleBase,
+        address::ExecutableIdentity& identity) noexcept;
+
+    // Starts work(context) on a new thread that nothing waits for. Returns
+    // false when the thread could not be started.
+    using RunInBackgroundFn = bool(*)(
+        void (*work)(void* context) noexcept,
+        void* context) noexcept;
+
     decltype(&::GetModuleFileNameW) getModuleFileName{};
     decltype(&::GetModuleHandleW) getModuleHandle{};
     ReadRuntimeVersionFn readRuntimeVersion{};
     decltype(&::MessageBoxW) messageBox{};
     DownloadAddressLibraryFn downloadAddressLibrary{};
+    ReadExecutableIdentityFn readExecutableIdentity{};
+    decltype(&::GetSystemTimeAsFileTime) getSystemTimeAsFileTime{};
+    RunInBackgroundFn runInBackground{};
 };
 [[nodiscard]] RuntimeProcessPlatform SystemRuntimeProcessPlatform() noexcept;
 

@@ -11,12 +11,17 @@ crt_version=14.44.17.14
 
 sdk_include_dir=${XSCAL_SDK_INCLUDE_DIR:-}
 yyjson_dir=${XSCAL_YYJSON_DIR:-}
+libdeflate_dir=${XSCAL_LIBDEFLATE_DIR:-}
 if [[ ! -f ${sdk_include_dir}/xscal/plugin_api.h ]]; then
     echo "Error: set XSCAL_SDK_INCLUDE_DIR to the directory containing xscal/plugin_api.h." >&2
     exit 1
 fi
 if [[ ! -f ${yyjson_dir}/yyjson.c ]]; then
     echo "Error: set XSCAL_YYJSON_DIR to the directory containing yyjson.c." >&2
+    exit 1
+fi
+if [[ ! -f ${libdeflate_dir}/lib/deflate_decompress.c ]]; then
+    echo "Error: set XSCAL_LIBDEFLATE_DIR to the libdeflate 1.22 source directory." >&2
     exit 1
 fi
 
@@ -49,7 +54,8 @@ cmake -S "${project_dir}" -B "${build_dir}" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${project_dir}/cmake/toolchains/xwin-clang.cmake" \
     -DXWIN_ROOT="${xwin_root}" \
     -DXSCAL_SDK_INCLUDE_DIR="${sdk_include_dir}" \
-    -DXSCAL_YYJSON_DIR="${yyjson_dir}"
+    -DXSCAL_YYJSON_DIR="${yyjson_dir}" \
+    -DXSCAL_LIBDEFLATE_DIR="${libdeflate_dir}"
 cmake --build "${build_dir}"
 
 mkdir -p "${dist_dir}"

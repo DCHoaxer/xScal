@@ -96,6 +96,13 @@ struct SignatureResult {
     HANDLE dllFile,
     HANDLE signatureFile) noexcept;
 
+// Runs the same checks as CheckPluginFile on bytes already in memory. The
+// signature's fileSize must equal size and its fileHash the SHA-256 of data.
+[[nodiscard]] SignatureResult CheckSignedData(
+    const void* data,
+    std::size_t size,
+    const PluginSignature& signature) noexcept;
+
 // Short reason text for log lines, e.g. "developer revoked".
 [[nodiscard]] const char* DescribeCheck(SignatureCheck check) noexcept;
 

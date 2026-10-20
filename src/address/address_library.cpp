@@ -1,15 +1,17 @@
 #include "address/address_library.hpp"
 
 #include "address/address_library_format.hpp"
+#include "address/address_library_key.hpp"
+#include "address/chacha20.hpp"
 #include "config/config.h"
 #include "platform/win32_file.hpp"
-#include "xscal/address_ids.h"
 
 #include <Windows.h>
 #include <winhttp.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <limits>
@@ -20,6 +22,19 @@ namespace {
 constexpr std::size_t kMaximumDatabaseSize = 1024 * 1024;
 constexpr std::size_t kMaximumEntries = 4096;
 constexpr int kNetworkTimeoutMilliseconds = 5'000;
+constexpr std::size_t kMarkerSize = 64;
+constexpr std::size_t kMaximumHeaderSize = 4096;
+constexpr std::size_t kMaximumEntrySize = 256;
+constexpr std::uint32_t kMaximumVersion = 0xFFFFFF;
+// 24 hours in FILETIME units of 100 ns.
+constexpr std::uint64_t kUpdateCheckInterval = 24ull * 3600 * 10'000'000;
+
+// Reads a marker file into text. False when the file is missing or unreadable.
+[[nodiscard]] bool ReadMarker(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    const wchar_t* extension,
+    std::string& text) noexcept;
 
 class UniqueInternetHandle final {
 public:
@@ -52,16 +67,18 @@ private:
 [[nodiscard]] bool FormatFileName(
     TargetKind target,
     const config::RuntimeVersion& runtime,
+    const wchar_t* extension,
     std::array<wchar_t, 96>& fileName) noexcept {
     const int length = std::swprintf(
         fileName.data(),
         fileName.size(),
-        L"version-%hu-%hu-%hu-%hu-%hs.bin",
+        L"version-%hu-%hu-%hu-%hu-%hs.%ls",
         runtime.major,
         runtime.minor,
         runtime.build,
         runtime.revision,
-        TargetKindName(target));
+        TargetKindName(target),
+        extension);
     return length > 0 &&
         static_cast<std::size_t>(length) < fileName.size();
 }
@@ -69,10 +86,11 @@ private:
 [[nodiscard]] bool ResolveFilePath(
     TargetKind target,
     const config::RuntimeVersion& runtime,
+    const wchar_t* extension,
     platform::ExecutableRelativePath& path) noexcept {
     std::array<wchar_t, 96> fileName{};
     std::array<wchar_t, 160> relativePath{};
-    if (!FormatFileName(target, runtime, fileName)) {
+    if (!FormatFileName(target, runtime, extension, fileName)) {
         return false;
     }
     const int length = std::swprintf(
@@ -85,7 +103,50 @@ private:
         platform::ResolveExecutableRelativePath(relativePath.data(), path);
 }
 
+bool ReadMarker(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    const wchar_t* extension,
+    std::string& text) noexcept {
+    platform::ExecutableRelativePath path;
+    return ResolveFilePath(target, runtime, extension, path) &&
+        platform::QueryFilePresence(path) == platform::FilePresence::Present &&
+        platform::ReadBoundedFile(path, kMarkerSize, text);
+}
+
+bool WriteMarker(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    const wchar_t* extension,
+    const char* text) noexcept {
+    platform::ExecutableRelativePath path;
+    return ResolveFilePath(target, runtime, extension, path) &&
+        platform::WriteFileAtomically(path, text);
+}
+
 }  // namespace
+
+bool ReadExecutableIdentity(
+    std::uintptr_t moduleBase,
+    ExecutableIdentity& identity) noexcept {
+    if (moduleBase == 0) {
+        return false;
+    }
+    const auto* const dos =
+        reinterpret_cast<const IMAGE_DOS_HEADER*>(moduleBase);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) {
+        return false;
+    }
+    const auto* const nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+        moduleBase + static_cast<std::uintptr_t>(dos->e_lfanew));
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+        return false;
+    }
+    identity.timeDateStamp = nt->FileHeader.TimeDateStamp;
+    identity.imageSize = nt->OptionalHeader.SizeOfImage;
+    return true;
+}
 
 bool DownloadAddressLibrary(
     TargetKind target,
@@ -94,13 +155,13 @@ bool DownloadAddressLibrary(
     contents.clear();
     std::array<wchar_t, 96> fileName{};
     std::array<wchar_t, 160> requestPath{};
-    if (!FormatFileName(target, runtime, fileName)) {
+    if (!FormatFileName(target, runtime, L"bin", fileName)) {
         return false;
     }
     const int pathLength = std::swprintf(
         requestPath.data(),
         requestPath.size(),
-        L"/addlib/%ls",
+        L"/addlib/v2/%ls",
         fileName.data());
     if (pathLength <= 0 ||
         static_cast<std::size_t>(pathLength) >= requestPath.size()) {
@@ -195,8 +256,78 @@ bool StoreAddressLibrary(
     const config::RuntimeVersion& runtime,
     std::string_view contents) noexcept {
     platform::ExecutableRelativePath path;
-    return ResolveFilePath(target, runtime, path) &&
+    return ResolveFilePath(target, runtime, L"bin", path) &&
         platform::WriteFileAtomically(path, contents);
+}
+
+bool IsUpdateDeclined(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    format::XScalVersion release,
+    std::uint32_t revision) noexcept {
+    std::string text;
+    unsigned int major{}, minor{}, patch{}, declinedRevision{};
+    if (!ReadMarker(target, runtime, L"declined", text) ||
+        sscanf_s(text.c_str(), "%u.%u.%u %u",
+            &major, &minor, &patch, &declinedRevision) != 4 ||
+        major > 255 || minor > 255 || patch > 255) {
+        return false;
+    }
+    const format::XScalVersion declined{
+        static_cast<std::uint8_t>(major),
+        static_cast<std::uint8_t>(minor),
+        static_cast<std::uint8_t>(patch)};
+    return !format::IsFileNewer(release, revision, declined, declinedRevision);
+}
+
+bool StoreDeclinedUpdate(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    format::XScalVersion release,
+    std::uint32_t revision) noexcept {
+    std::array<char, kMarkerSize> text{};
+    std::snprintf(
+        text.data(), text.size(), "%u.%u.%u %u",
+        static_cast<unsigned int>(release.major),
+        static_cast<unsigned int>(release.minor),
+        static_cast<unsigned int>(release.patch),
+        static_cast<unsigned int>(revision));
+    return WriteMarker(target, runtime, L"declined", text.data());
+}
+
+bool IsUpdateCheckDue(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    std::uint64_t nowFileTime) noexcept {
+    std::string text;
+    unsigned long long checkedAt{};
+    unsigned int major{}, minor{}, patch{};
+    if (!ReadMarker(target, runtime, L"checked", text) ||
+        sscanf_s(text.c_str(), "%llu %u.%u.%u",
+            &checkedAt, &major, &minor, &patch) != 4) {
+        return true;
+    }
+    if (major != config::kXScalVersion.major ||
+        minor != config::kXScalVersion.minor ||
+        patch != config::kXScalVersion.patch) {
+        return true;
+    }
+    return checkedAt > nowFileTime ||
+        nowFileTime - checkedAt >= kUpdateCheckInterval;
+}
+
+bool StoreUpdateCheck(
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    std::uint64_t nowFileTime) noexcept {
+    std::array<char, kMarkerSize> text{};
+    std::snprintf(
+        text.data(), text.size(), "%llu %u.%u.%u",
+        static_cast<unsigned long long>(nowFileTime),
+        static_cast<unsigned int>(config::kXScalVersion.major),
+        static_cast<unsigned int>(config::kXScalVersion.minor),
+        static_cast<unsigned int>(config::kXScalVersion.patch));
+    return WriteMarker(target, runtime, L"checked", text.data());
 }
 
 Library::Library() noexcept
@@ -211,9 +342,10 @@ Library::Library() noexcept
 LoadStatus Library::Load(
     TargetKind target,
     const config::RuntimeVersion& runtime,
+    const ExecutableIdentity& executable,
     std::uintptr_t moduleBase) noexcept {
     platform::ExecutableRelativePath path;
-    if (!ResolveFilePath(target, runtime, path)) {
+    if (!ResolveFilePath(target, runtime, L"bin", path)) {
         return LoadStatus::ReadFailed;
     }
     const auto presence = platform::QueryFilePresence(path);
@@ -228,26 +360,22 @@ LoadStatus Library::Load(
     if (!platform::ReadBoundedFile(path, kMaximumDatabaseSize, contents)) {
         return LoadStatus::ReadFailed;
     }
-    return ParseContents(contents, target, runtime, moduleBase);
+    return Parse(contents, target, runtime, executable, moduleBase);
 }
 
-bool Library::Parse(
+LoadStatus Library::Parse(
     std::string_view contents,
     TargetKind target,
     const config::RuntimeVersion& runtime,
-    std::uintptr_t moduleBase) noexcept {
-    return ParseContents(contents, target, runtime, moduleBase) ==
-        LoadStatus::Loaded;
-}
-
-LoadStatus Library::ParseContents(
-    std::string_view contents,
-    TargetKind target,
-    const config::RuntimeVersion& runtime,
+    const ExecutableIdentity& executable,
     std::uintptr_t moduleBase) noexcept {
     entries_.clear();
     moduleBase_ = 0;
     requiredXScalVersion_ = {};
+    releaseXScalVersion_ = {};
+    revision_ = 0;
+    fileExecutable_ = {};
+    lastSignatureCheck_ = plugins::signing::SignatureCheck::MissingSignature;
     if (contents.size() < sizeof(format::Header)) {
         return LoadStatus::Invalid;
     }
@@ -256,36 +384,98 @@ LoadStatus Library::ParseContents(
     std::memcpy(&header, contents.data(), sizeof(header));
     if (std::memcmp(header.magic, format::kMagic, sizeof(header.magic)) != 0 ||
         header.schemaVersion != format::kSchemaVersion ||
+        header.headerSize < sizeof(header) ||
+        header.headerSize > kMaximumHeaderSize ||
+        header.entrySize < sizeof(format::Entry) ||
+        header.entrySize > kMaximumEntrySize ||
+        header.entryCount == 0 || header.entryCount > kMaximumEntries) {
+        return LoadStatus::Invalid;
+    }
+    const std::size_t signedSize = header.headerSize +
+        static_cast<std::size_t>(header.entryCount) * header.entrySize;
+    if (contents.size() !=
+        signedSize + sizeof(plugins::signing::PluginSignature)) {
+        return LoadStatus::Invalid;
+    }
+
+    plugins::signing::PluginSignature signature{};
+    std::memcpy(&signature, contents.data() + signedSize, sizeof(signature));
+    const auto signatureResult = plugins::signing::CheckSignedData(
+        contents.data(), signedSize, signature);
+    lastSignatureCheck_ = signatureResult.check;
+    if (signatureResult.check != plugins::signing::SignatureCheck::Valid ||
+        signature.certificate.idPrefix[0] != '\0') {
+        return LoadStatus::BadSignature;
+    }
+
+    // Without the key the records cannot be read. Runtime logs this case.
+    if (!kHasLibraryKey) {
+        return LoadStatus::Invalid;
+    }
+
+    fileExecutable_ = {header.imageTimeDateStamp, header.imageSize};
+    if (header.reserved != 0 ||
         header.targetKind != TargetValue(target) ||
         header.runtimeMajor != runtime.major ||
         header.runtimeMinor != runtime.minor ||
         header.runtimeBuild != runtime.build ||
-        header.runtimeRevision != runtime.revision ||
-        header.entryCount == 0 || header.entryCount > kMaximumEntries ||
-        header.reserved != 0) {
+        header.runtimeRevision != runtime.revision) {
         return LoadStatus::Invalid;
     }
-    const std::size_t entryBytes =
-        static_cast<std::size_t>(header.entryCount) * sizeof(format::Entry);
-    if (contents.size() != sizeof(header) + entryBytes) {
+    if (fileExecutable_ != executable) {
+        return LoadStatus::WrongExecutable;
+    }
+    if (header.releaseXScalVersion == 0 ||
+        header.releaseXScalVersion > kMaximumVersion ||
+        header.minimumXScalVersion > kMaximumVersion) {
         return LoadStatus::Invalid;
+    }
+    const auto release = format::DecodeXScalVersion(header.releaseXScalVersion);
+    const auto required = format::DecodeXScalVersion(header.minimumXScalVersion);
+    if (header.minimumXScalVersion != 0) {
+        constexpr format::XScalVersion available{
+            config::kXScalVersion.major,
+            config::kXScalVersion.minor,
+            config::kXScalVersion.patch};
+        if (format::IsVersionNewer(required, available)) {
+            requiredXScalVersion_ = required;
+            return LoadStatus::RequiresNewerXScal;
+        }
     }
 
+    std::string records;
+    std::uint8_t key[kChaCha20KeySize];
+    const std::size_t recordsSize = signedSize - header.headerSize;
     try {
-        std::vector<format::Entry> records(header.entryCount);
-        std::memcpy(
-            records.data(),
-            contents.data() + sizeof(header),
-            entryBytes);
-        if (format::HashEntries(records.data(), records.size()) !=
-            header.entriesHash) {
-            return LoadStatus::Invalid;
-        }
-        entries_.reserve(records.size());
-        for (const auto& record : records) {
+        records.assign(contents.data() + header.headerSize, recordsSize);
+    } catch (...) {
+        return LoadStatus::Invalid;
+    }
+    std::memcpy(key, kLibraryKey, sizeof(key));
+    ChaCha20Xor(
+        key,
+        header.nonce,
+        0,
+        reinterpret_cast<std::uint8_t*>(records.data()),
+        recordsSize);
+    SecureZeroMemory(key, sizeof(key));
+
+    const auto wipeRecords = [&records]() noexcept {
+        SecureZeroMemory(records.data(), records.size());
+    };
+    try {
+        entries_.reserve(header.entryCount);
+        for (std::uint32_t index = 0; index < header.entryCount; ++index) {
+            format::Entry record{};
+            std::memcpy(
+                &record,
+                records.data() +
+                    static_cast<std::size_t>(index) * header.entrySize,
+                sizeof(record));
             if (record.id == 0 || record.reserved != 0 ||
                 (record.kind != format::kAddressEntry &&
                  record.kind != format::kConstantEntry)) {
+                wipeRecords();
                 entries_.clear();
                 return LoadStatus::Invalid;
             }
@@ -303,9 +493,11 @@ LoadStatus Library::ParseContents(
                 return left.id < right.id;
             });
     } catch (...) {
+        wipeRecords();
         entries_.clear();
         return LoadStatus::Invalid;
     }
+    wipeRecords();
     if (std::adjacent_find(
             entries_.begin(),
             entries_.end(),
@@ -315,25 +507,9 @@ LoadStatus Library::ParseContents(
         entries_.clear();
         return LoadStatus::Invalid;
     }
-    const Entry* const requirement = Find(XSCAL_CONSTANT_MINIMUM_XSCAL_VERSION);
-    if (requirement != nullptr) {
-        if (requirement->kind != EntryKind::Constant ||
-            requirement->value == 0 ||
-            (requirement->value & 0xFFFFFFFFFF000000ull) != 0) {
-            entries_.clear();
-            return LoadStatus::Invalid;
-        }
-        requiredXScalVersion_ = format::DecodeXScalVersion(
-            static_cast<std::uint32_t>(requirement->value));
-        constexpr format::XScalVersion available{
-            config::kXScalVersion.major,
-            config::kXScalVersion.minor,
-            config::kXScalVersion.patch};
-        if (format::IsVersionNewer(requiredXScalVersion_, available)) {
-            entries_.clear();
-            return LoadStatus::RequiresNewerXScal;
-        }
-    }
+    requiredXScalVersion_ = required;
+    releaseXScalVersion_ = release;
+    revision_ = header.revision;
     moduleBase_ = moduleBase;
     return LoadStatus::Loaded;
 }
@@ -391,6 +567,22 @@ std::size_t Library::EntryCount() const noexcept {
 
 format::XScalVersion Library::RequiredXScalVersion() const noexcept {
     return requiredXScalVersion_;
+}
+
+format::XScalVersion Library::ReleaseXScalVersion() const noexcept {
+    return releaseXScalVersion_;
+}
+
+std::uint32_t Library::Revision() const noexcept {
+    return revision_;
+}
+
+plugins::signing::SignatureCheck Library::LastSignatureCheck() const noexcept {
+    return lastSignatureCheck_;
+}
+
+ExecutableIdentity Library::FileExecutable() const noexcept {
+    return fileExecutable_;
 }
 
 const XScalAddressLibraryV1* Library::Interface() const noexcept {

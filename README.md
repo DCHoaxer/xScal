@@ -30,13 +30,15 @@ Requirements (Windows x64 only):
 - CMake 3.20+ on `PATH`
 - xScal plugin SDK headers (the directory containing `xscal/plugin_api.h`) — not included in this repo
 - [yyjson](https://github.com/ibireme/yyjson) source (the directory containing `yyjson.c` and `yyjson.h`) — not included in this repo
+- [libdeflate](https://github.com/ebiggers/libdeflate) 1.22 source (the directory containing `libdeflate.h` and `lib/`) — not included in this repo. xScal uses it to decompress `.ba2` archive entries.
 
-On the first build, run these from an x64 Native Tools / Developer Command Prompt. Doing so tells CMake where the SDK and yyjson are:
+On the first build, run these from an x64 Native Tools / Developer Command Prompt. Doing so tells CMake where the SDK, yyjson and libdeflate are:
 
 ```bat
 cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ^
   -DXSCAL_SDK_INCLUDE_DIR=C:\path\to\xscal-sdk\include ^
-  -DXSCAL_YYJSON_DIR=C:\path\to\yyjson\src
+  -DXSCAL_YYJSON_DIR=C:\path\to\yyjson\src ^
+  -DXSCAL_LIBDEFLATE_DIR=C:\path\to\libdeflate
 build.bat
 ```
 
@@ -57,13 +59,14 @@ Requirements:
 - CMake 3.29+, Ninja, and clang, lld, and llvm (`clang-cl`, `lld-link`, `llvm-lib`, `llvm-ml`, `llvm-mt`, `llvm-rc`)
   - Fedora: `sudo dnf install cmake ninja-build clang lld llvm`
 - xwin (`cargo install xwin --locked`), only if there is no Windows SDK in `~/.xwin` yet
-- The same xScal plugin SDK headers and yyjson source as on Windows
+- The same xScal plugin SDK headers, yyjson source and libdeflate source as on Windows
 
 Build:
 
 ```sh
 XSCAL_SDK_INCLUDE_DIR=/path/to/xscal-sdk/include \
 XSCAL_YYJSON_DIR=/path/to/yyjson/src \
+XSCAL_LIBDEFLATE_DIR=/path/to/libdeflate \
 ./build.sh
 ```
 

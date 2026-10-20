@@ -170,10 +170,10 @@ VtableHookStatus MovieRootHookController::Install(
                 reinterpret_cast<void*>(destroyHook_.Original())),
             std::memory_order_release);
     }
-    DiagnosticLogFormat(
-        "xScal MovieRoot destructor hook: %s",
-        VtableHookStatusName(destroyStatus));
     if (destroyStatus != VtableHookStatus::Installed) {
+        DiagnosticLogFormat(
+            "xScal MovieRoot destructor hook: %s",
+            VtableHookStatusName(destroyStatus));
         return VtableHookStatus::Installed;
     }
 
@@ -187,10 +187,11 @@ VtableHookStatus MovieRootHookController::Install(
                 reinterpret_cast<void*>(advanceHook_.Original())),
             std::memory_order_release);
         movieapi::SetAdvanceAvailable(true);
+    } else {
+        DiagnosticLogFormat(
+            "xScal MovieRoot AdvanceFrame hook: %s",
+            VtableHookStatusName(advanceStatus));
     }
-    DiagnosticLogFormat(
-        "xScal MovieRoot AdvanceFrame hook: %s",
-        VtableHookStatusName(advanceStatus));
 
     const auto invokeStatus = invokeHook_.InstallSlot(
         vtableOffset + layout::kInvokeVtableOffset,
@@ -202,10 +203,11 @@ VtableHookStatus MovieRootHookController::Install(
                 reinterpret_cast<void*>(invokeHook_.Original())),
             std::memory_order_release);
         movieapi::SetInvokeAvailable(true);
+    } else {
+        DiagnosticLogFormat(
+            "xScal MovieRoot Invoke hook: %s",
+            VtableHookStatusName(invokeStatus));
     }
-    DiagnosticLogFormat(
-        "xScal MovieRoot Invoke hook: %s",
-        VtableHookStatusName(invokeStatus));
     return VtableHookStatus::Installed;
 }
 

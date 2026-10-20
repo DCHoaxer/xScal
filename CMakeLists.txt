@@ -6,11 +6,13 @@ if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "xscal requires a Windows x64 toolchain")
 endif()
 
-# The plugin SDK headers and yyjson are not part of this repository.
+# The plugin SDK headers, yyjson and libdeflate are not part of this repository.
 set(XSCAL_SDK_INCLUDE_DIR "" CACHE PATH
     "Directory containing the xScal plugin SDK headers (xscal/plugin_api.h)")
 set(XSCAL_YYJSON_DIR "" CACHE PATH
     "Directory containing yyjson.c and yyjson.h")
+set(XSCAL_LIBDEFLATE_DIR "" CACHE PATH
+    "Directory containing libdeflate.h and lib/ of libdeflate 1.22")
 
 if(NOT EXISTS "${XSCAL_SDK_INCLUDE_DIR}/xscal/plugin_api.h")
     message(FATAL_ERROR "Set XSCAL_SDK_INCLUDE_DIR to the xScal plugin SDK include directory")
@@ -18,6 +20,19 @@ endif()
 if(NOT EXISTS "${XSCAL_YYJSON_DIR}/yyjson.c")
     message(FATAL_ERROR "Set XSCAL_YYJSON_DIR to a yyjson source directory")
 endif()
+if(NOT EXISTS "${XSCAL_LIBDEFLATE_DIR}/lib/deflate_decompress.c")
+    message(FATAL_ERROR "Set XSCAL_LIBDEFLATE_DIR to a libdeflate source directory")
+endif()
+
+# Only the zlib decompressor of libdeflate is built. It is compiled for speed in
+# every configuration because it decompresses every compressed archive entry.
+set(XSCAL_LIBDEFLATE_SOURCES
+    "${XSCAL_LIBDEFLATE_DIR}/lib/adler32.c"
+    "${XSCAL_LIBDEFLATE_DIR}/lib/deflate_decompress.c"
+    "${XSCAL_LIBDEFLATE_DIR}/lib/utils.c"
+    "${XSCAL_LIBDEFLATE_DIR}/lib/x86/cpu_features.c"
+    "${XSCAL_LIBDEFLATE_DIR}/lib/zlib_decompress.c"
+)
 
 set(XSCAL_CHAT_SOURCES
     src/chat/chat_auth_file.cpp
@@ -34,7 +49,9 @@ set(XSCAL_CHAT_SOURCES
 set(XSCAL_CORE_SOURCES
     ${XSCAL_CHAT_SOURCES}
     "${XSCAL_YYJSON_DIR}/yyjson.c"
+    ${XSCAL_LIBDEFLATE_SOURCES}
     src/address/address_library.cpp
+    src/archive/archive_stream_hook.cpp
     src/common/json.cpp
     src/api/mod_storage.cpp
     src/api/file_command_service.cpp
@@ -133,6 +150,7 @@ target_include_directories(dxgi PRIVATE
     src
     "${XSCAL_SDK_INCLUDE_DIR}"
     "${XSCAL_YYJSON_DIR}"
+    "${XSCAL_LIBDEFLATE_DIR}"
     "${XSCAL_BUILD_INFO_DIR}")
 target_link_libraries(dxgi PRIVATE
     version
@@ -144,5 +162,8 @@ target_compile_options(dxgi PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:/EHsc;/GR->
     $<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/Gy;/Gw>)
 target_link_options(dxgi PRIVATE /OPT:REF /OPT:ICF)
+# Source options come after the target's, so /O2 replaces a size setting.
+set_source_files_properties(${XSCAL_LIBDEFLATE_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "/O2;/w")
 set_target_properties(dxgi PROPERTIES PREFIX "" OUTPUT_NAME "dxgi")
 add_dependencies(dxgi xscal_build_info)

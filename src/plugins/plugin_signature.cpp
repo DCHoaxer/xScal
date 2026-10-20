@@ -90,6 +90,86 @@ BOOL CALLBACK LoadCng(PINIT_ONCE, PVOID, PVOID*) noexcept {
     return std::memchr(text, '\0', sizeof(text)) != nullptr;
 }
 
+// Runs every check on a parsed signature. hashContent hashes the signed bytes
+// and returns an NTSTATUS, so files and memory share one implementation.
+template <typename HashContent>
+[[nodiscard]] SignatureResult CheckSignature(
+    const PluginSignature& file,
+    HashContent&& hashContent) noexcept {
+    SignatureResult result{};
+    const DeveloperCertificate& certificate = file.certificate;
+    if (std::memcmp(file.magic, kSignatureMagic, sizeof(file.magic)) != 0 ||
+        file.version != kSignatureVersion ||
+        certificate.version != kCertificateVersion ||
+        !IsTerminated(certificate.idPrefix)) {
+        result.check = SignatureCheck::MalformedSignature;
+        return result;
+    }
+    result.developerId = certificate.developerId;
+    std::memcpy(result.idPrefix, certificate.idPrefix, sizeof(result.idPrefix));
+
+    const auto failWithStatus = [&result](long status, SignatureCheck invalid) {
+        if (status == kStatusInvalidSignature) {
+            result.check = invalid;
+        } else if (IsWin32Status(status)) {
+            result.check = SignatureCheck::ReadError;
+            result.error = static_cast<std::uint32_t>(status) & 0xFFFFU;
+        } else {
+            result.check = SignatureCheck::CryptoError;
+            result.error = static_cast<std::uint32_t>(status);
+        }
+        return result;
+    };
+
+    const auto rootKeys = RootPublicKeys();
+    if (certificate.rootKeyIndex >= rootKeys.size()) {
+        result.check = SignatureCheck::UnknownRootKey;
+        return result;
+    }
+    Hash digest{};
+    long status = HashBytes(&certificate, kCertificateSignedSize, digest);
+    if (status >= 0) {
+        std::uint8_t rootKey[kPublicKeySize];
+        std::memcpy(rootKey, rootKeys[certificate.rootKeyIndex].data(), sizeof(rootKey));
+        status = VerifyDigest(rootKey, digest, certificate.rootSignature);
+    }
+    if (status < 0)
+        return failWithStatus(status, SignatureCheck::BadCertificate);
+
+    const auto revokedDevelopers = RevokedDeveloperIds();
+    if (std::find(revokedDevelopers.begin(), revokedDevelopers.end(),
+            certificate.developerId) != revokedDevelopers.end()) {
+        result.check = SignatureCheck::DeveloperRevoked;
+        return result;
+    }
+
+    std::uint64_t contentSize = 0;
+    status = hashContent(contentSize, result.fileHash);
+    if (status < 0)
+        return failWithStatus(status, SignatureCheck::CryptoError);
+    if (contentSize != file.fileSize ||
+        std::memcmp(result.fileHash.data(), file.fileHash, kHashSize) != 0) {
+        result.check = SignatureCheck::FileMismatch;
+        return result;
+    }
+    const auto revokedBuilds = RevokedPluginHashes();
+    if (std::find(revokedBuilds.begin(), revokedBuilds.end(),
+            result.fileHash) != revokedBuilds.end()) {
+        result.check = SignatureCheck::BuildRevoked;
+        return result;
+    }
+
+    status = HashBytes(&file, kPluginSignatureSignedSize, digest);
+    if (status >= 0)
+        status = VerifyDigest(certificate.publicKey, digest, file.signature);
+    if (status < 0)
+        return failWithStatus(status, SignatureCheck::BadSignature);
+
+    result.check = SignatureCheck::Valid;
+    return result;
+}
+
+
 }  // namespace
 
 long HashBytes(const void* data, std::size_t size, Hash& hash) noexcept {
@@ -192,76 +272,19 @@ SignatureResult CheckPluginFile(HANDLE dllFile, HANDLE signatureFile) noexcept {
         result.error = ::GetLastError();
         return result;
     }
-    const DeveloperCertificate& certificate = file.certificate;
-    if (std::memcmp(file.magic, kSignatureMagic, sizeof(file.magic)) != 0 ||
-        file.version != kSignatureVersion ||
-        certificate.version != kCertificateVersion ||
-        !IsTerminated(certificate.idPrefix)) {
-        result.check = SignatureCheck::MalformedSignature;
-        return result;
-    }
-    result.developerId = certificate.developerId;
-    std::memcpy(result.idPrefix, certificate.idPrefix, sizeof(result.idPrefix));
+    return CheckSignature(file, [dllFile](std::uint64_t& size, Hash& hash) noexcept {
+        return HashFile(dllFile, size, hash);
+    });
+}
 
-    const auto failWithStatus = [&result](long status, SignatureCheck invalid) {
-        if (status == kStatusInvalidSignature) {
-            result.check = invalid;
-        } else if (IsWin32Status(status)) {
-            result.check = SignatureCheck::ReadError;
-            result.error = static_cast<std::uint32_t>(status) & 0xFFFFU;
-        } else {
-            result.check = SignatureCheck::CryptoError;
-            result.error = static_cast<std::uint32_t>(status);
-        }
-        return result;
-    };
-
-    const auto rootKeys = RootPublicKeys();
-    if (certificate.rootKeyIndex >= rootKeys.size()) {
-        result.check = SignatureCheck::UnknownRootKey;
-        return result;
-    }
-    Hash digest{};
-    long status = HashBytes(&certificate, kCertificateSignedSize, digest);
-    if (status >= 0) {
-        std::uint8_t rootKey[kPublicKeySize];
-        std::memcpy(rootKey, rootKeys[certificate.rootKeyIndex].data(), sizeof(rootKey));
-        status = VerifyDigest(rootKey, digest, certificate.rootSignature);
-    }
-    if (status < 0)
-        return failWithStatus(status, SignatureCheck::BadCertificate);
-
-    const auto revokedDevelopers = RevokedDeveloperIds();
-    if (std::find(revokedDevelopers.begin(), revokedDevelopers.end(),
-            certificate.developerId) != revokedDevelopers.end()) {
-        result.check = SignatureCheck::DeveloperRevoked;
-        return result;
-    }
-
-    std::uint64_t dllSize = 0;
-    status = HashFile(dllFile, dllSize, result.fileHash);
-    if (status < 0)
-        return failWithStatus(status, SignatureCheck::CryptoError);
-    if (dllSize != file.fileSize ||
-        std::memcmp(result.fileHash.data(), file.fileHash, kHashSize) != 0) {
-        result.check = SignatureCheck::FileMismatch;
-        return result;
-    }
-    const auto revokedBuilds = RevokedPluginHashes();
-    if (std::find(revokedBuilds.begin(), revokedBuilds.end(),
-            result.fileHash) != revokedBuilds.end()) {
-        result.check = SignatureCheck::BuildRevoked;
-        return result;
-    }
-
-    status = HashBytes(&file, kPluginSignatureSignedSize, digest);
-    if (status >= 0)
-        status = VerifyDigest(certificate.publicKey, digest, file.signature);
-    if (status < 0)
-        return failWithStatus(status, SignatureCheck::BadSignature);
-
-    result.check = SignatureCheck::Valid;
-    return result;
+SignatureResult CheckSignedData(
+    const void* data,
+    std::size_t size,
+    const PluginSignature& signature) noexcept {
+    return CheckSignature(signature, [data, size](std::uint64_t& hashedSize, Hash& hash) noexcept {
+        hashedSize = size;
+        return HashBytes(data, size, hash);
+    });
 }
 
 const char* DescribeCheck(SignatureCheck check) noexcept {
