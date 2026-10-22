@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <cstddef>
 #include <cstring>
 #include <limits>
 
@@ -60,6 +61,43 @@ bool ResolveRequiredRvas(
         }
     }
     return true;
+}
+
+bool ResolveAddressBindings(
+    VirtualQueryFn virtualQuery,
+    std::uintptr_t moduleBase,
+    const void* profile,
+    void* runtime,
+    const AddressBinding* bindings,
+    std::size_t count) noexcept {
+    const auto* const source = static_cast<const std::byte*>(profile);
+    auto* const target = static_cast<std::byte*>(runtime);
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& binding = bindings[index];
+        std::uintptr_t rva{};
+        std::uintptr_t address{};
+        std::memcpy(&rva, source + binding.source, sizeof(rva));
+        if (!ResolveRequiredRva(moduleBase, rva, address) ||
+            (binding.check == AddressCheck::Executable &&
+             !IsExecutableAddress(
+                 virtualQuery, reinterpret_cast<const void*>(address))) ||
+            (binding.check == AddressCheck::Readable &&
+             !IsReadableRange(
+                 virtualQuery,
+                 reinterpret_cast<const void*>(address),
+                 sizeof(std::uintptr_t)))) {
+            return false;
+        }
+        std::memcpy(target + binding.target, &address, sizeof(address));
+    }
+    return true;
+}
+
+int MemoryAccessExceptionFilter(unsigned long exceptionCode) noexcept {
+    return exceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+            exceptionCode == EXCEPTION_IN_PAGE_ERROR
+        ? EXCEPTION_EXECUTE_HANDLER
+        : EXCEPTION_CONTINUE_SEARCH;
 }
 
 bool TryCopyBytes(
