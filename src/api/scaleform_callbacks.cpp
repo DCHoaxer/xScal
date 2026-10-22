@@ -7,6 +7,14 @@
 #include "chat/scaleform_payload.hpp"
 #include "common/json.hpp"
 #include "config/config.h"
+#include "datamanager/pip_boy_inventory_provider.hpp"
+#include "datamanager/pip_boy_collections_provider.hpp"
+#include "datamanager/pip_boy_radio_provider.hpp"
+#include "datamanager/pip_boy_perks_provider.hpp"
+#include "datamanager/pip_boy_player_info_provider.hpp"
+#include "datamanager/pip_boy_quests_provider.hpp"
+#include "datamanager/pip_boy_special_provider.hpp"
+#include "datamanager/pip_boy_status_provider.hpp"
 #include "datamanager/pip_boy_stats_effects_provider.hpp"
 #include "datamanager/player_map_position_provider.hpp"
 #include "datamanager/time_data_provider.hpp"
@@ -47,6 +55,22 @@ constexpr std::string_view kPendingTimeDataPayload =
     R"json({"status":"pending","reason":"time_data"})json";
 constexpr std::string_view kPendingPlayerMapPositionPayload =
     R"json({"status":"pending","reason":"player_map_position"})json";
+constexpr std::string_view kPendingPipBoySpecialPayload =
+    R"json({"status":"pending","reason":"special"})json";
+constexpr std::string_view kPendingPipBoyStatusPayload =
+    R"json({"status":"pending","reason":"status"})json";
+constexpr std::string_view kPendingPipBoyPlayerInfoPayload =
+    R"json({"status":"pending","reason":"player_info"})json";
+constexpr std::string_view kPendingPipBoyPerksPayload =
+    R"json({"status":"pending","reason":"perks"})json";
+constexpr std::string_view kPendingPipBoyQuestsPayload =
+    R"json({"status":"pending","reason":"quests"})json";
+constexpr std::string_view kPendingPipBoyInventoryPayload =
+    R"json({"status":"pending","reason":"inventory"})json";
+constexpr std::string_view kPendingPipBoyRadioPayload =
+    R"json({"status":"pending","reason":"radio"})json";
+constexpr std::string_view kPendingPipBoyCollectionsPayload =
+    R"json({"status":"pending","reason":"collections"})json";
 constexpr std::string_view kInvalidRequestPayload =
     R"json({"status":"error","reason":"invalid_request"})json";
 
@@ -58,6 +82,14 @@ struct ScaleformCallbackTargets final {
     datamanager::PipBoyStatsEffectsProvider& statsEffects;
     datamanager::TimeDataProvider& timeData;
     datamanager::PlayerMapPositionProvider& playerMapPosition;
+    datamanager::PipBoySpecialProvider& pipBoySpecial;
+    datamanager::PipBoyStatusProvider& pipBoyStatus;
+    datamanager::PipBoyPlayerInfoProvider& pipBoyPlayerInfo;
+    datamanager::PipBoyPerksProvider& pipBoyPerks;
+    datamanager::PipBoyQuestsProvider& pipBoyQuests;
+    datamanager::PipBoyInventoryProvider& pipBoyInventory;
+    datamanager::PipBoyRadioProvider& pipBoyRadio;
+    datamanager::PipBoyCollectionsProvider& pipBoyCollections;
     const std::atomic<TargetKind>& targetKind;
 };
 
@@ -364,6 +396,100 @@ using StealthMeterRequest =
         default:
             return call.result->SetString(kInvalidRequestPayload);
     }
+}
+
+// Writes a Game.* provider result: the JSON, or the status payload the
+// request returned.
+[[nodiscard]] bool SetGameProviderResult(
+    const ScaleformCall& call,
+    std::string_view pendingPayload,
+    datamanager::GameProviderRequestStatus status,
+    std::string_view payload) noexcept {
+    switch (status) {
+        case datamanager::GameProviderRequestStatus::Delivered:
+            if (call.result->SetString(payload)) {
+                return true;
+            }
+            return call.result->SetString(kInvalidRequestPayload);
+        case datamanager::GameProviderRequestStatus::Inactive:
+            return call.result->SetString(kInactiveProviderPayload);
+        case datamanager::GameProviderRequestStatus::SnapshotUnavailable:
+            return call.result->SetString(pendingPayload);
+        default:
+            return call.result->SetString(kInvalidRequestPayload);
+    }
+}
+
+[[nodiscard]] bool HandlePipBoySpecial(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoySpecial.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoySpecialPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyStatus(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyStatus.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyStatusPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyPlayerInfo(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyPlayerInfo.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyPlayerInfoPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyPerks(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyPerks.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyPerksPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyQuests(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyQuests.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyQuestsPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyInventory(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyInventory.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyInventoryPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyCollections(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyCollections.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyCollectionsPayload, status, payload);
+}
+
+[[nodiscard]] bool HandlePipBoyRadio(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    std::string payload;
+    const auto status = targets.pipBoyRadio.Request(payload);
+    return SetGameProviderResult(
+        call, kPendingPipBoyRadioPayload, status, payload);
 }
 
 [[nodiscard]] bool HandleTimeData(
@@ -764,6 +890,15 @@ template <GamepadOperation kOperation>
 }
 
 constexpr std::array kScaleformCallbacks{
+    ScaleformCallbackDefinition{"Game.Clock", &HandleTimeData},
+    ScaleformCallbackDefinition{"Game.GetCollections", &HandlePipBoyCollections},
+    ScaleformCallbackDefinition{"Game.GetInventory", &HandlePipBoyInventory},
+    ScaleformCallbackDefinition{"Game.GetPerks", &HandlePipBoyPerks},
+    ScaleformCallbackDefinition{"Game.GetPlayerInfo", &HandlePipBoyPlayerInfo},
+    ScaleformCallbackDefinition{"Game.GetQuests", &HandlePipBoyQuests},
+    ScaleformCallbackDefinition{"Game.GetRadio", &HandlePipBoyRadio},
+    ScaleformCallbackDefinition{"Game.GetSpecial", &HandlePipBoySpecial},
+    ScaleformCallbackDefinition{"Game.GetStatus", &HandlePipBoyStatus},
     ScaleformCallbackDefinition{"GetXSRuntimeInfo", &HandleRuntimeInfo},
     ScaleformCallbackDefinition{"GetZFERuntimeInfo", &HandleRuntimeInfo},
     ScaleformCallbackDefinition{
@@ -903,12 +1038,28 @@ ScaleformCallbackRouter::ScaleformCallbackRouter(
     datamanager::PipBoyStatsEffectsProvider& statsEffects,
     datamanager::TimeDataProvider& timeData,
     datamanager::PlayerMapPositionProvider& playerMapPosition,
+    datamanager::PipBoySpecialProvider& pipBoySpecial,
+    datamanager::PipBoyStatusProvider& pipBoyStatus,
+    datamanager::PipBoyPlayerInfoProvider& pipBoyPlayerInfo,
+    datamanager::PipBoyPerksProvider& pipBoyPerks,
+    datamanager::PipBoyQuestsProvider& pipBoyQuests,
+    datamanager::PipBoyInventoryProvider& pipBoyInventory,
+    datamanager::PipBoyRadioProvider& pipBoyRadio,
+    datamanager::PipBoyCollectionsProvider& pipBoyCollections,
     PluginScaleformDispatch pluginDispatch) noexcept
     : fileCommands_{fileCommands},
       input_{input},
       statsEffects_{statsEffects},
       timeData_{timeData},
       playerMapPosition_{playerMapPosition},
+      pipBoySpecial_{pipBoySpecial},
+      pipBoyStatus_{pipBoyStatus},
+      pipBoyPlayerInfo_{pipBoyPlayerInfo},
+      pipBoyPerks_{pipBoyPerks},
+      pipBoyQuests_{pipBoyQuests},
+      pipBoyInventory_{pipBoyInventory},
+      pipBoyRadio_{pipBoyRadio},
+      pipBoyCollections_{pipBoyCollections},
       pluginDispatch_{pluginDispatch != nullptr
           ? pluginDispatch
           : &plugins::DispatchScaleform} {}
@@ -929,6 +1080,14 @@ bool ScaleformCallbackRouter::Dispatch(
         statsEffects_,
         timeData_,
         playerMapPosition_,
+        pipBoySpecial_,
+        pipBoyStatus_,
+        pipBoyPlayerInfo_,
+        pipBoyPerks_,
+        pipBoyQuests_,
+        pipBoyInventory_,
+        pipBoyRadio_,
+        pipBoyCollections_,
         targetKind_,
     };
     const auto* const callback = FindCallback(name);

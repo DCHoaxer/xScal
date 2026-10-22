@@ -462,12 +462,28 @@ Runtime::Runtime(VtableHookPlatform platform) noexcept
     : statsEffectsProvider_(platform.virtualQuery),
       timeDataProvider_(platform.virtualQuery),
       playerMapPositionProvider_(platform.virtualQuery),
+      pipBoySpecialProvider_(platform.virtualQuery),
+      pipBoyStatusProvider_(platform.virtualQuery),
+      pipBoyPlayerInfoProvider_(platform.virtualQuery),
+      pipBoyPerksProvider_(platform.virtualQuery),
+      pipBoyQuestsProvider_(platform.virtualQuery),
+      pipBoyInventoryProvider_(platform.virtualQuery),
+      pipBoyRadioProvider_(platform.virtualQuery),
+      pipBoyCollectionsProvider_(platform.virtualQuery),
       callbackRouter_(
           fileCommandService_,
           inputState_,
           statsEffectsProvider_,
           timeDataProvider_,
-          playerMapPositionProvider_),
+          playerMapPositionProvider_,
+          pipBoySpecialProvider_,
+          pipBoyStatusProvider_,
+          pipBoyPlayerInfoProvider_,
+          pipBoyPerksProvider_,
+          pipBoyQuestsProvider_,
+          pipBoyInventoryProvider_,
+          pipBoyRadioProvider_,
+          pipBoyCollectionsProvider_),
       controller_(callbackRouter_, platform),
       gamepadInputFilter_(platform),
       xscalPriority_(
@@ -516,11 +532,43 @@ VtableHookStatus Runtime::Initialize(
             timeDataProvider_.Install(profile, moduleBase);
         const bool playerMapPositionInstalled =
             playerMapPositionProvider_.Install(profile, moduleBase);
+        const bool pipBoySpecialInstalled =
+            profile.pipBoySpecialEnabled &&
+            pipBoySpecialProvider_.Install(profile, moduleBase);
+        const bool pipBoyStatusInstalled =
+            profile.pipBoyStatusEnabled &&
+            pipBoyStatusProvider_.Install(profile, moduleBase);
+        const bool pipBoyPlayerInfoInstalled =
+            profile.pipBoyPlayerInfoEnabled &&
+            pipBoyPlayerInfoProvider_.Install(profile, moduleBase);
+        const bool pipBoyPerksInstalled =
+            profile.pipBoyPerksEnabled &&
+            pipBoyPerksProvider_.Install(profile, moduleBase);
+        const bool pipBoyQuestsInstalled =
+            profile.pipBoyQuestsEnabled &&
+            pipBoyQuestsProvider_.Install(profile, moduleBase);
+        const bool pipBoyInventoryInstalled =
+            profile.pipBoyInventoryEnabled &&
+            pipBoyInventoryProvider_.Install(profile, moduleBase);
+        const bool pipBoyRadioInstalled =
+            profile.pipBoyRadioEnabled &&
+            pipBoyRadioProvider_.Install(profile, moduleBase);
+        const bool pipBoyCollectionsInstalled =
+            profile.pipBoyCollectionsEnabled &&
+            pipBoyCollectionsProvider_.Install(profile, moduleBase);
         DiagnosticLogFormat(
-            "xScal Providers: {StatsEffectsProvider: %s, TimeDataProvider: %s, PlayerMapPositionProvider: %s}",
+            "xScal Providers: {StatsEffectsProvider: %s, TimeDataProvider: %s, PlayerMapPositionProvider: %s, PipBoySpecialProvider: %s, PipBoyStatusProvider: %s, PipBoyPlayerInfoProvider: %s, PipBoyPerksProvider: %s, PipBoyQuestsProvider: %s, PipBoyInventoryProvider: %s, PipBoyRadioProvider: %s, PipBoyCollectionsProvider: %s}",
             statsEffectsInstalled ? "Enabled" : "Disabled",
             timeDataInstalled ? "Enabled" : "Disabled",
-            playerMapPositionInstalled ? "Enabled" : "Disabled");
+            playerMapPositionInstalled ? "Enabled" : "Disabled",
+            pipBoySpecialInstalled ? "Enabled" : "Disabled",
+            pipBoyStatusInstalled ? "Enabled" : "Disabled",
+            pipBoyPlayerInfoInstalled ? "Enabled" : "Disabled",
+            pipBoyPerksInstalled ? "Enabled" : "Disabled",
+            pipBoyQuestsInstalled ? "Enabled" : "Disabled",
+            pipBoyInventoryInstalled ? "Enabled" : "Disabled",
+            pipBoyRadioInstalled ? "Enabled" : "Disabled",
+            pipBoyCollectionsInstalled ? "Enabled" : "Disabled");
         (void)archive::InstallArchiveStreamHook(profile.archiveStream, moduleBase);
         DiagnosticLogFormat(
             "xScal Modules: {xScalPriority: %s}",

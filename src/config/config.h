@@ -13,7 +13,7 @@ struct XScalVersion final {
     std::uint8_t patch;
 };
 
-inline constexpr XScalVersion kXScalVersion{0, 4, 27};
+inline constexpr XScalVersion kXScalVersion{0, 4, 28};
 
 inline constexpr std::size_t kMaximumScaleformComponentPaths = 16;
 inline constexpr std::size_t kMaximumScaleformComponentPathLength = 255;
