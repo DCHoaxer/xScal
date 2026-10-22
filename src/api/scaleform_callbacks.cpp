@@ -890,6 +890,7 @@ template <GamepadOperation kOperation>
 }
 
 constexpr std::array kScaleformCallbacks{
+    ScaleformCallbackDefinition{"Game.Clock", &HandleTimeData},
     ScaleformCallbackDefinition{"Game.GetCollections", &HandlePipBoyCollections},
     ScaleformCallbackDefinition{"Game.GetInventory", &HandlePipBoyInventory},
     ScaleformCallbackDefinition{"Game.GetPerks", &HandlePipBoyPerks},
