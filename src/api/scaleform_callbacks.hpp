@@ -17,16 +17,8 @@ struct ScaleformCall;
 
 namespace datamanager {
 class PipBoyStatsEffectsProvider;
-class TimeDataProvider;
 class PlayerMapPositionProvider;
-class PipBoySpecialProvider;
-class PipBoyStatusProvider;
-class PipBoyPlayerInfoProvider;
-class PipBoyPerksProvider;
-class PipBoyQuestsProvider;
-class PipBoyInventoryProvider;
-class PipBoyRadioProvider;
-class PipBoyCollectionsProvider;
+struct PipBoyProviders;
 }
 
 using PluginScaleformDispatch = bool(*)(
@@ -43,16 +35,8 @@ public:
         FileCommandService& fileCommands,
         InputState& input,
         datamanager::PipBoyStatsEffectsProvider& statsEffects,
-        datamanager::TimeDataProvider& timeData,
         datamanager::PlayerMapPositionProvider& playerMapPosition,
-        datamanager::PipBoySpecialProvider& pipBoySpecial,
-        datamanager::PipBoyStatusProvider& pipBoyStatus,
-        datamanager::PipBoyPlayerInfoProvider& pipBoyPlayerInfo,
-        datamanager::PipBoyPerksProvider& pipBoyPerks,
-        datamanager::PipBoyQuestsProvider& pipBoyQuests,
-        datamanager::PipBoyInventoryProvider& pipBoyInventory,
-        datamanager::PipBoyRadioProvider& pipBoyRadio,
-        datamanager::PipBoyCollectionsProvider& pipBoyCollections,
+        datamanager::PipBoyProviders& pipBoy,
         PluginScaleformDispatch pluginDispatch = nullptr) noexcept;
 
     void SetTargetKind(TargetKind targetKind) noexcept;
@@ -64,16 +48,8 @@ private:
     FileCommandService& fileCommands_;
     InputState& input_;
     datamanager::PipBoyStatsEffectsProvider& statsEffects_;
-    datamanager::TimeDataProvider& timeData_;
     datamanager::PlayerMapPositionProvider& playerMapPosition_;
-    datamanager::PipBoySpecialProvider& pipBoySpecial_;
-    datamanager::PipBoyStatusProvider& pipBoyStatus_;
-    datamanager::PipBoyPlayerInfoProvider& pipBoyPlayerInfo_;
-    datamanager::PipBoyPerksProvider& pipBoyPerks_;
-    datamanager::PipBoyQuestsProvider& pipBoyQuests_;
-    datamanager::PipBoyInventoryProvider& pipBoyInventory_;
-    datamanager::PipBoyRadioProvider& pipBoyRadio_;
-    datamanager::PipBoyCollectionsProvider& pipBoyCollections_;
+    datamanager::PipBoyProviders& pipBoy_;
     std::atomic<TargetKind> targetKind_{TargetKind::Steam};
     PluginScaleformDispatch pluginDispatch_;
 };

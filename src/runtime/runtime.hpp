@@ -5,17 +5,9 @@
 #include "api/scaleform_callbacks.hpp"
 #include "chat/chat_session.hpp"
 #include "config/target_profile.hpp"
-#include "datamanager/pip_boy_inventory_provider.hpp"
-#include "datamanager/pip_boy_collections_provider.hpp"
-#include "datamanager/pip_boy_radio_provider.hpp"
-#include "datamanager/pip_boy_perks_provider.hpp"
-#include "datamanager/pip_boy_player_info_provider.hpp"
-#include "datamanager/pip_boy_quests_provider.hpp"
-#include "datamanager/pip_boy_special_provider.hpp"
-#include "datamanager/pip_boy_status_provider.hpp"
+#include "datamanager/pip_boy_providers.hpp"
 #include "datamanager/pip_boy_stats_effects_provider.hpp"
 #include "datamanager/player_map_position_provider.hpp"
-#include "datamanager/time_data_provider.hpp"
 #include "hook/movie_root_hook.hpp"
 #include "input/input_state.hpp"
 #include "input/xinput_hook.hpp"
@@ -76,16 +68,8 @@ private:
     chat::ChatSession chatSession_;
     InputState inputState_;
     datamanager::PipBoyStatsEffectsProvider statsEffectsProvider_;
-    datamanager::TimeDataProvider timeDataProvider_;
     datamanager::PlayerMapPositionProvider playerMapPositionProvider_;
-    datamanager::PipBoySpecialProvider pipBoySpecialProvider_;
-    datamanager::PipBoyStatusProvider pipBoyStatusProvider_;
-    datamanager::PipBoyPlayerInfoProvider pipBoyPlayerInfoProvider_;
-    datamanager::PipBoyPerksProvider pipBoyPerksProvider_;
-    datamanager::PipBoyQuestsProvider pipBoyQuestsProvider_;
-    datamanager::PipBoyInventoryProvider pipBoyInventoryProvider_;
-    datamanager::PipBoyRadioProvider pipBoyRadioProvider_;
-    datamanager::PipBoyCollectionsProvider pipBoyCollectionsProvider_;
+    datamanager::PipBoyProviders pipBoyProviders_;
     ScaleformCallbackRouter callbackRouter_;
     MovieRootHookController controller_;
     GamepadInputFilterController gamepadInputFilter_;

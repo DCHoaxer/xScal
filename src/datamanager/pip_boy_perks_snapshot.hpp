@@ -16,7 +16,6 @@ struct ResolvedPipBoyPerksRuntime final {
     std::uintptr_t getPlayerGameModeIndex{};
     std::uintptr_t getPerkCardRankPerk{};
     std::uintptr_t getPerkDescriptionText{};
-    std::uintptr_t getPerkCardRankPointCost{};
     std::uintptr_t deallocate{};
 };
 

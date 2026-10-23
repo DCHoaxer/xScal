@@ -20,9 +20,6 @@ struct ResolvedPipBoyStatusRuntime final {
     std::uintptr_t getPlayerCapsCount{};
     std::uintptr_t isActorGhoulRace{};
     std::uintptr_t gameCalendarGlobal{};
-    std::uintptr_t getGameMonth{};
-    std::uintptr_t getGameDay{};
-    std::uintptr_t getGameHour{};
     std::uintptr_t gameYearSettingValue{};
     std::uintptr_t lethalRadsSettingValue{};
 };

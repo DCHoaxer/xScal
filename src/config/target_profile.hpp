@@ -131,8 +131,10 @@ struct ArchiveStreamProfile final {
 struct NativeActorValueProfile final {
     std::uintptr_t localPlayerGlobal;
     std::uintptr_t localPlayerPrimaryVtable;
+    // Found through RTTI by PipBoyProviders::Install; not in the Address Library.
     std::uintptr_t localPlayerActorValueOwnerVtable;
     std::uintptr_t actorValueRegistry;
+    // Found through RTTI by PipBoyProviders::Install; not in the Address Library.
     std::uintptr_t actorValueInfoVtable;
 
     std::size_t actorValueOwnerOffset;
@@ -180,7 +182,6 @@ struct NativePipBoyPerksProfile final {
     std::uintptr_t getPlayerGameModeIndex;
     std::uintptr_t getPerkCardRankPerk;
     std::uintptr_t getPerkDescriptionText;
-    std::uintptr_t getPerkCardRankPointCost;
     std::uintptr_t deallocate;
 
     std::size_t playerPerkCardTreeOffset;
@@ -201,6 +202,12 @@ struct NativePipBoyPerksProfile final {
     std::size_t formIdOffset;
     std::size_t formTypeOffset;
     std::size_t perkCardFormType;
+    // Rank point cost: the card's rank pointer array, then per rank a
+    // TESGlobal pointer or, when it is null, a cost byte.
+    std::size_t cardRanksOffset;
+    std::size_t rankCostGlobalOffset;
+    std::size_t rankCostOffset;
+    std::size_t globalValueOffset;
 
     [[nodiscard]] constexpr bool operator==(
         const NativePipBoyPerksProfile&) const noexcept = default;
@@ -215,9 +222,6 @@ struct NativePipBoyStatusProfile final {
     std::uintptr_t getPlayerCapsCount;
     std::uintptr_t isActorGhoulRace;
     std::uintptr_t gameCalendarGlobal;
-    std::uintptr_t getGameMonth;
-    std::uintptr_t getGameDay;
-    std::uintptr_t getGameHour;
     std::uintptr_t gameYearSettingValue;
     std::uintptr_t lethalRadsSettingValue;
 
@@ -233,6 +237,12 @@ struct NativePipBoyStatusProfile final {
     // DamageResist, PoisonResist, FireResist, ElectricResist, FrostResist,
     // MagicResist, RadResistIngestion, RadResistExposure, EnergyResist.
     std::array<std::size_t, 9> resistRegistryOffsets;
+    // Calendar slots holding the month, day and hour TESGlobals, and the
+    // value offset inside a TESGlobal.
+    std::size_t calendarMonthOffset;
+    std::size_t calendarDayOffset;
+    std::size_t calendarHourOffset;
+    std::size_t globalValueOffset;
 
     [[nodiscard]] constexpr bool operator==(
         const NativePipBoyStatusProfile&) const noexcept = default;
@@ -241,6 +251,7 @@ struct NativePipBoyStatusProfile final {
 // Exact-build data needed to read the quest objectives the Pip-Boy lists.
 struct NativePipBoyQuestsProfile final {
     std::uintptr_t objectiveStateEntriesGlobal;
+    // Entries global plus stateTableCapacityOffset.
     std::uintptr_t objectiveStateCapacityGlobal;
     std::uintptr_t getQuestFromHandle;
     std::uintptr_t getQuestObjectiveById;
@@ -249,6 +260,7 @@ struct NativePipBoyQuestsProfile final {
     std::uintptr_t formatQuestText;
     std::uintptr_t deallocate;
     std::uintptr_t questStateEntriesGlobal;
+    // Entries global plus stateTableCapacityOffset.
     std::uintptr_t questStateCapacityGlobal;
     std::uintptr_t getFixedStringCharacters;
 
@@ -264,6 +276,8 @@ struct NativePipBoyQuestsProfile final {
     std::size_t questStateChainOffset;
     std::size_t questStateFlagsOffset;
     std::size_t questSwfFileOffset;
+    // Distance from a state table's entries pointer to its capacity.
+    std::size_t stateTableCapacityOffset;
 
     [[nodiscard]] constexpr bool operator==(
         const NativePipBoyQuestsProfile&) const noexcept = default;
@@ -273,6 +287,7 @@ struct NativePipBoyQuestsProfile final {
 struct NativePipBoyInventoryProfile final {
     std::uintptr_t localPlayerGlobal;
     std::uintptr_t localPlayerPrimaryVtable;
+    // Found through RTTI by PipBoyProviders::Install; not in the Address Library.
     std::uintptr_t inventoryListVtable;
     std::uintptr_t tryAcquireReadLock;
     std::uintptr_t releaseReadLock;
@@ -324,27 +339,6 @@ struct NativePipBoyInventoryProfile final {
         const NativePipBoyInventoryProfile&) const noexcept = default;
 };
 
-// Exact-build data needed to read the radio stations and tuner state.
-struct NativePipBoyRadioProfile final {
-    std::uintptr_t radioLock;
-    std::uintptr_t radioStationMap;
-    std::uintptr_t radioManagerGlobal;
-    std::uintptr_t tryAcquireReadLock;
-    std::uintptr_t releaseReadLock;
-    std::uintptr_t getFixedStringCharacters;
-
-    std::size_t radioStationMapEntriesOffset;
-    std::size_t radioStationMapCapacityOffset;
-    std::size_t radioStationEntrySize;
-    std::size_t radioStationNameOffset;
-    std::size_t radioStationChainOffset;
-    std::size_t radioTunedFrequencyOffset;
-    std::size_t radioPoweredOffset;
-
-    [[nodiscard]] constexpr bool operator==(
-        const NativePipBoyRadioProfile&) const noexcept = default;
-};
-
 // Exact-build data needed to read the collectibles the Pip-Boy lists.
 struct NativePipBoyCollectionsProfile final {
     std::uintptr_t localPlayerGlobal;
@@ -385,7 +379,6 @@ struct DataManagerProfile final {
     NativePipBoyStatusProfile pipBoyStatus;
     NativePipBoyQuestsProfile pipBoyQuests;
     NativePipBoyInventoryProfile pipBoyInventory;
-    NativePipBoyRadioProfile pipBoyRadio;
     NativePipBoyCollectionsProfile pipBoyCollections;
 
     [[nodiscard]] constexpr bool operator==(
@@ -436,7 +429,6 @@ struct TargetProfile final {
     bool pipBoyStatusEnabled;
     bool pipBoyQuestsEnabled;
     bool pipBoyInventoryEnabled;
-    bool pipBoyRadioEnabled;
     bool pipBoyCollectionsEnabled;
 
     [[nodiscard]] constexpr bool operator==(

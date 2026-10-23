@@ -59,9 +59,6 @@ using GetActorCarryWeightValues = void(__fastcall*)(
 using GetPlayerCapsCount = std::int32_t(__fastcall*)(void* player);
 using IsActorGhoulRace = bool(__fastcall*)(void* actor);
 // Calendar getters fall back to built-in defaults when a global is missing.
-using GetGameMonth = std::uint32_t(__fastcall*)(void* calendar);
-using GetGameDay = std::int32_t(__fastcall*)(void* calendar);
-using GetGameHour = float(__fastcall*)(void* calendar);
 
 struct CarryWeightValues final {
     float carried{};
@@ -138,25 +135,6 @@ struct CalendarValues final {
     float hour{};
 };
 
-[[nodiscard]] bool CallCalendarGetters(
-    const ResolvedPipBoyStatusRuntime& runtime,
-    std::uintptr_t calendar,
-    CalendarValues& values) noexcept {
-    auto* const object = reinterpret_cast<void*>(calendar);
-    __try {
-        values.month =
-            reinterpret_cast<GetGameMonth>(runtime.getGameMonth)(object);
-        values.day = reinterpret_cast<GetGameDay>(runtime.getGameDay)(object);
-        values.hour =
-            reinterpret_cast<GetGameHour>(runtime.getGameHour)(object);
-    } __except (platform::MemoryAccessExceptionFilter(GetExceptionCode())) {
-        values = {};
-        return false;
-    }
-    return std::isfinite(values.hour) && values.hour >= 0.0F &&
-        values.hour < 2147483648.0F;
-}
-
 // The game writes these values into UI integers with cvttss2si.
 [[nodiscard]] bool TruncateToInt32(
     float value,
@@ -167,6 +145,73 @@ struct CalendarValues final {
         return false;
     }
     converted = static_cast<std::int32_t>(std::trunc(value));
+    return true;
+}
+
+// Reads one calendar TESGlobal value; an empty slot leaves global at 0.
+[[nodiscard]] bool ReadCalendarGlobal(
+    std::uintptr_t calendar,
+    std::size_t slotOffset,
+    std::size_t valueOffset,
+    std::uintptr_t& global,
+    float& value) noexcept {
+    global = 0;
+    value = 0.0F;
+    if (!platform::TryCopyBytes(
+            reinterpret_cast<const void*>(calendar + slotOffset),
+            &global,
+            sizeof(global))) {
+        return false;
+    }
+    return global == 0 ||
+        platform::TryCopyBytes(
+            reinterpret_cast<const void*>(global + valueOffset),
+            &value,
+            sizeof(value));
+}
+
+// Converts the values as the game's month, day and hour getters do: the
+// month truncated to 16 bits, the day truncated to an int, the hour as
+// stored. Those getters return a fixed default for an empty slot; xScal
+// reports no date instead, so present is false then.
+[[nodiscard]] bool ReadCalendarValues(
+    const config::NativePipBoyStatusProfile& layout,
+    std::uintptr_t calendar,
+    bool& present,
+    CalendarValues& values) noexcept {
+    present = false;
+    values = {};
+    std::uintptr_t monthGlobal{};
+    std::uintptr_t dayGlobal{};
+    std::uintptr_t hourGlobal{};
+    float month{};
+    float day{};
+    float hour{};
+    if (!ReadCalendarGlobal(
+            calendar, layout.calendarMonthOffset, layout.globalValueOffset,
+            monthGlobal, month) ||
+        !ReadCalendarGlobal(
+            calendar, layout.calendarDayOffset, layout.globalValueOffset,
+            dayGlobal, day) ||
+        !ReadCalendarGlobal(
+            calendar, layout.calendarHourOffset, layout.globalValueOffset,
+            hourGlobal, hour)) {
+        return false;
+    }
+    if (monthGlobal == 0 || dayGlobal == 0 || hourGlobal == 0) {
+        return true;
+    }
+    std::int32_t wholeMonth{};
+    std::int32_t wholeDay{};
+    if (!TruncateToInt32(month, wholeMonth) ||
+        !TruncateToInt32(day, wholeDay) ||
+        !std::isfinite(hour) || hour < 0.0F || hour >= 2147483648.0F) {
+        return false;
+    }
+    values.month = static_cast<std::uint16_t>(wholeMonth);
+    values.day = wholeDay;
+    values.hour = hour;
+    present = true;
     return true;
 }
 
@@ -213,9 +258,16 @@ struct CalendarValues final {
         return true;
     }
 
+    bool present{};
     CalendarValues values;
+    if (!ReadCalendarValues(runtime.layout, calendar, present, values)) {
+        return false;
+    }
+    if (!present) {
+        return true;
+    }
     PipBoyGameDate result;
-    if (!CallCalendarGetters(runtime, calendar, values) ||
+    if (
         !platform::TryCopyBytes(
             reinterpret_cast<const void*>(runtime.gameYearSettingValue),
             &result.year,
@@ -301,18 +353,6 @@ constexpr std::array kPipBoyStatusRuntimeBindings{
         offsetof(ResolvedPipBoyStatusRuntime, gameCalendarGlobal),
         platform::AddressCheck::Readable),
     platform::Bind(
-        offsetof(config::NativePipBoyStatusProfile, getGameMonth),
-        offsetof(ResolvedPipBoyStatusRuntime, getGameMonth),
-        platform::AddressCheck::Executable),
-    platform::Bind(
-        offsetof(config::NativePipBoyStatusProfile, getGameDay),
-        offsetof(ResolvedPipBoyStatusRuntime, getGameDay),
-        platform::AddressCheck::Executable),
-    platform::Bind(
-        offsetof(config::NativePipBoyStatusProfile, getGameHour),
-        offsetof(ResolvedPipBoyStatusRuntime, getGameHour),
-        platform::AddressCheck::Executable),
-    platform::Bind(
         offsetof(config::NativePipBoyStatusProfile, gameYearSettingValue),
         offsetof(ResolvedPipBoyStatusRuntime, gameYearSettingValue),
         platform::AddressCheck::Readable),
@@ -333,7 +373,11 @@ bool ResolvePipBoyStatusRuntime(
         status.getActorCarryWeightValues == 0 ||
         status.getPlayerCapsCount == 0 ||
         status.damageModifierType == 0 ||
-        status.damageModifierType > 2) {
+        status.damageModifierType > 2 ||
+        status.calendarMonthOffset == 0 ||
+        status.calendarDayOffset == 0 ||
+        status.calendarHourOffset == 0 ||
+        status.globalValueOffset == 0) {
         return false;
     }
 

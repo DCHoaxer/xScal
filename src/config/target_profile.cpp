@@ -286,16 +286,8 @@ constexpr std::array kActorValueFields{
         offsetof(config::NativeActorValueProfile, localPlayerPrimaryVtable),
         FieldKind::Rva),
     Field(
-        XSCAL_ADDRESS_LOCAL_PLAYER_ACTOR_VALUE_OWNER_VTABLE,
-        offsetof(config::NativeActorValueProfile, localPlayerActorValueOwnerVtable),
-        FieldKind::Rva),
-    Field(
         XSCAL_ADDRESS_ACTOR_VALUE_REGISTRY,
         offsetof(config::NativeActorValueProfile, actorValueRegistry),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_ACTOR_VALUE_INFO_VTABLE,
-        offsetof(config::NativeActorValueProfile, actorValueInfoVtable),
         FieldKind::Rva),
     Field(
         XSCAL_CONSTANT_ACTOR_VALUE_OWNER_OFFSET,
@@ -425,10 +417,6 @@ constexpr std::array kPipBoyPerksFields{
         offsetof(config::NativePipBoyPerksProfile, getPerkDescriptionText),
         FieldKind::Rva),
     Field(
-        XSCAL_ADDRESS_GET_PERK_CARD_RANK_POINT_COST,
-        offsetof(config::NativePipBoyPerksProfile, getPerkCardRankPointCost),
-        FieldKind::Rva),
-    Field(
         XSCAL_ADDRESS_GAME_DEALLOCATE,
         offsetof(config::NativePipBoyPerksProfile, deallocate),
         FieldKind::Rva),
@@ -479,6 +467,22 @@ constexpr std::array kPipBoyPerksFields{
     Field(
         XSCAL_CONSTANT_PERK_CARD_GAME_MODE_OFFSET,
         offsetof(config::NativePipBoyPerksProfile, cardGameModeOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_PERK_CARD_RANKS_OFFSET,
+        offsetof(config::NativePipBoyPerksProfile, cardRanksOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_PERK_CARD_RANK_COST_GLOBAL_OFFSET,
+        offsetof(config::NativePipBoyPerksProfile, rankCostGlobalOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_PERK_CARD_RANK_COST_OFFSET,
+        offsetof(config::NativePipBoyPerksProfile, rankCostOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_TES_GLOBAL_VALUE_OFFSET,
+        offsetof(config::NativePipBoyPerksProfile, globalValueOffset),
         FieldKind::RequiredConstant),
     Field(
         XSCAL_CONSTANT_PERK_FULL_NAME_OFFSET,
@@ -570,6 +574,22 @@ constexpr std::array kPipBoyStatusFields{
         offsetof(config::NativePipBoyStatusProfile, resistRegistryOffsets) + 8 * sizeof(std::size_t),
         FieldKind::RequiredConstant),
     Field(
+        XSCAL_CONSTANT_CALENDAR_GAME_MONTH_OFFSET,
+        offsetof(config::NativePipBoyStatusProfile, calendarMonthOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_CALENDAR_GAME_DAY_OFFSET,
+        offsetof(config::NativePipBoyStatusProfile, calendarDayOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_CALENDAR_GAME_HOUR_OFFSET,
+        offsetof(config::NativePipBoyStatusProfile, calendarHourOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_TES_GLOBAL_VALUE_OFFSET,
+        offsetof(config::NativePipBoyStatusProfile, globalValueOffset),
+        FieldKind::RequiredConstant),
+    Field(
         XSCAL_ADDRESS_GET_ACTOR_VALUE_MODIFIER_BY_TYPE,
         offsetof(config::NativePipBoyStatusProfile, getActorValueModifierByType),
         FieldKind::Rva),
@@ -586,20 +606,8 @@ constexpr std::array kPipBoyStatusFields{
         offsetof(config::NativePipBoyStatusProfile, isActorGhoulRace),
         FieldKind::Rva),
     Field(
-        XSCAL_ADDRESS_GAME_CALENDAR_GLOBAL,
+        XSCAL_ADDRESS_CALENDAR_SINGLETON_GLOBAL,
         offsetof(config::NativePipBoyStatusProfile, gameCalendarGlobal),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_GET_GAME_MONTH,
-        offsetof(config::NativePipBoyStatusProfile, getGameMonth),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_GET_GAME_DAY,
-        offsetof(config::NativePipBoyStatusProfile, getGameDay),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_GET_GAME_HOUR,
-        offsetof(config::NativePipBoyStatusProfile, getGameHour),
         FieldKind::Rva),
     Field(
         XSCAL_ADDRESS_GAME_YEAR_SETTING_VALUE,
@@ -651,10 +659,6 @@ constexpr std::array kPipBoyQuestsFields{
         offsetof(config::NativePipBoyQuestsProfile, objectiveStateEntriesGlobal),
         FieldKind::Rva),
     Field(
-        XSCAL_ADDRESS_OBJECTIVE_STATE_CAPACITY_GLOBAL,
-        offsetof(config::NativePipBoyQuestsProfile, objectiveStateCapacityGlobal),
-        FieldKind::Rva),
-    Field(
         XSCAL_ADDRESS_GET_QUEST_FROM_HANDLE,
         offsetof(config::NativePipBoyQuestsProfile, getQuestFromHandle),
         FieldKind::Rva),
@@ -681,10 +685,6 @@ constexpr std::array kPipBoyQuestsFields{
     Field(
         XSCAL_ADDRESS_QUEST_STATE_ENTRIES_GLOBAL,
         offsetof(config::NativePipBoyQuestsProfile, questStateEntriesGlobal),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_QUEST_STATE_CAPACITY_GLOBAL,
-        offsetof(config::NativePipBoyQuestsProfile, questStateCapacityGlobal),
         FieldKind::Rva),
     Field(
         XSCAL_ADDRESS_GET_FIXED_STRING_CHARACTERS,
@@ -738,73 +738,25 @@ constexpr std::array kPipBoyQuestsFields{
         XSCAL_CONSTANT_QUEST_SWF_FILE_OFFSET,
         offsetof(config::NativePipBoyQuestsProfile, questSwfFileOffset),
         FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_STATE_TABLE_CAPACITY_OFFSET,
+        offsetof(config::NativePipBoyQuestsProfile, stateTableCapacityOffset),
+        FieldKind::RequiredConstant),
 };
 
 void ReadPipBoyQuestsProfile(
     const XScalAddressLibraryV1& addresses,
     config::NativePipBoyQuestsProfile& quests) noexcept {
     ReadProfileFields(addresses, kPipBoyQuestsFields, quests);
-}
-
-constexpr std::array kPipBoyRadioFields{
-    Field(
-        XSCAL_ADDRESS_RADIO_LOCK,
-        offsetof(config::NativePipBoyRadioProfile, radioLock),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_RADIO_STATION_MAP,
-        offsetof(config::NativePipBoyRadioProfile, radioStationMap),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_RADIO_MANAGER_GLOBAL,
-        offsetof(config::NativePipBoyRadioProfile, radioManagerGlobal),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_TRY_ACQUIRE_READ_LOCK,
-        offsetof(config::NativePipBoyRadioProfile, tryAcquireReadLock),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_RELEASE_READ_LOCK,
-        offsetof(config::NativePipBoyRadioProfile, releaseReadLock),
-        FieldKind::Rva),
-    Field(
-        XSCAL_ADDRESS_GET_FIXED_STRING_CHARACTERS,
-        offsetof(config::NativePipBoyRadioProfile, getFixedStringCharacters),
-        FieldKind::Rva),
-    Field(
-        XSCAL_CONSTANT_RADIO_STATION_MAP_ENTRIES_OFFSET,
-        offsetof(config::NativePipBoyRadioProfile, radioStationMapEntriesOffset),
-        FieldKind::RequiredConstant),
-    Field(
-        XSCAL_CONSTANT_RADIO_STATION_MAP_CAPACITY_OFFSET,
-        offsetof(config::NativePipBoyRadioProfile, radioStationMapCapacityOffset),
-        FieldKind::RequiredConstant),
-    Field(
-        XSCAL_CONSTANT_RADIO_STATION_ENTRY_SIZE,
-        offsetof(config::NativePipBoyRadioProfile, radioStationEntrySize),
-        FieldKind::RequiredConstant),
-    Field(
-        XSCAL_CONSTANT_RADIO_STATION_NAME_OFFSET,
-        offsetof(config::NativePipBoyRadioProfile, radioStationNameOffset),
-        FieldKind::RequiredConstant),
-    Field(
-        XSCAL_CONSTANT_RADIO_STATION_CHAIN_OFFSET,
-        offsetof(config::NativePipBoyRadioProfile, radioStationChainOffset),
-        FieldKind::RequiredConstant),
-    Field(
-        XSCAL_CONSTANT_RADIO_TUNED_FREQUENCY_OFFSET,
-        offsetof(config::NativePipBoyRadioProfile, radioTunedFrequencyOffset),
-        FieldKind::RequiredConstant),
-    Field(
-        XSCAL_CONSTANT_RADIO_POWERED_OFFSET,
-        offsetof(config::NativePipBoyRadioProfile, radioPoweredOffset),
-        FieldKind::RequiredConstant),
-};
-
-void ReadPipBoyRadioProfile(
-    const XScalAddressLibraryV1& addresses,
-    config::NativePipBoyRadioProfile& radio) noexcept {
-    ReadProfileFields(addresses, kPipBoyRadioFields, radio);
+    // Both state tables keep their capacity next to the entries pointer, so
+    // the capacity globals need no Address Library entries of their own.
+    if (quests.objectiveStateEntriesGlobal != 0 &&
+        quests.questStateEntriesGlobal != 0) {
+        quests.objectiveStateCapacityGlobal =
+            quests.objectiveStateEntriesGlobal + quests.stateTableCapacityOffset;
+        quests.questStateCapacityGlobal =
+            quests.questStateEntriesGlobal + quests.stateTableCapacityOffset;
+    }
 }
 
 constexpr std::array kPipBoyCollectionsFields{
@@ -906,15 +858,11 @@ constexpr std::array kPipBoyInventoryFields{
         offsetof(config::NativePipBoyInventoryProfile, localPlayerPrimaryVtable),
         FieldKind::Rva),
     Field(
-        XSCAL_ADDRESS_INVENTORY_LIST_VTABLE,
-        offsetof(config::NativePipBoyInventoryProfile, inventoryListVtable),
-        FieldKind::Rva),
-    Field(
         XSCAL_ADDRESS_TRY_ACQUIRE_READ_LOCK,
         offsetof(config::NativePipBoyInventoryProfile, tryAcquireReadLock),
         FieldKind::Rva),
     Field(
-        XSCAL_ADDRESS_RELEASE_READ_LOCK,
+        XSCAL_ADDRESS_ACTIVE_EFFECTS_RELEASE_LOCK,
         offsetof(config::NativePipBoyInventoryProfile, releaseReadLock),
         FieldKind::Rva),
     Field(
@@ -1151,7 +1099,6 @@ bool ReadTargetProfile(
     ReadPipBoyStatusProfile(addresses, result.dataManager.pipBoyStatus);
     ReadPipBoyQuestsProfile(addresses, result.dataManager.pipBoyQuests);
     ReadPipBoyInventoryProfile(addresses, result.dataManager.pipBoyInventory);
-    ReadPipBoyRadioProfile(addresses, result.dataManager.pipBoyRadio);
     ReadPipBoyCollectionsProfile(addresses, result.dataManager.pipBoyCollections);
     ReadArchiveStreamProfile(addresses, result.archiveStream);
 
@@ -1183,10 +1130,6 @@ bool ReadTargetProfile(
     result.pipBoyInventoryEnabled =
         ReadConstant(addresses, XSCAL_CONSTANT_PIPBOY_INVENTORY_ENABLED, inventoryEnabled) &&
         inventoryEnabled != 0;
-    std::size_t radioEnabled{};
-    result.pipBoyRadioEnabled =
-        ReadConstant(addresses, XSCAL_CONSTANT_PIPBOY_RADIO_ENABLED, radioEnabled) &&
-        radioEnabled != 0;
     std::size_t collectionsEnabled{};
     result.pipBoyCollectionsEnabled =
         ReadConstant(addresses, XSCAL_CONSTANT_PIPBOY_COLLECTIONS_ENABLED, collectionsEnabled) &&

@@ -9,6 +9,7 @@
 #include <Windows.h>
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string_view>
 #include <utility>
@@ -41,12 +42,6 @@ using GetPerkCardRankPerk = void*(__fastcall*)(
     std::int32_t gameMode,
     std::uint8_t rankIndex);
 using GetPerkDescriptionText = void(__fastcall*)(void* perk, GameString* text);
-// Returns the float cost holder's value truncated to int when the rank record
-// has one, otherwise the record's byte cost. Reads only the card.
-using GetPerkCardRankPointCost = std::int32_t(__fastcall*)(
-    const void* card,
-    std::uint8_t rankIndex);
-
 template <typename T>
 [[nodiscard]] bool ReadField(
     std::uintptr_t object,
@@ -168,18 +163,38 @@ template <typename T>
     return true;
 }
 
-[[nodiscard]] bool CallGetPerkCardRankPointCost(
-    std::uintptr_t function,
+// Reads the point cost the way the game's rank cost getter does: the rank
+// record's TESGlobal value truncated to int when it has one, otherwise the
+// record's cost byte. The caller has checked rankIndex against the rank count.
+[[nodiscard]] bool ReadPerkCardRankPointCost(
+    const config::NativePipBoyPerksProfile& layout,
     std::uintptr_t card,
     std::uint8_t rankIndex,
     std::int32_t& pointCost) noexcept {
-    __try {
-        pointCost = reinterpret_cast<GetPerkCardRankPointCost>(function)(
-            reinterpret_cast<const void*>(card), rankIndex);
-    } __except (platform::MemoryAccessExceptionFilter(GetExceptionCode())) {
-        pointCost = 0;
+    pointCost = 0;
+    std::uintptr_t ranks{};
+    std::uintptr_t rank{};
+    std::uintptr_t costGlobal{};
+    std::uint8_t costByte{};
+    if (!ReadPointerField(card, layout.cardRanksOffset, ranks) ||
+        !ReadPointerField(
+            ranks, static_cast<std::size_t>(rankIndex) * sizeof(std::uintptr_t),
+            rank) ||
+        !ReadField(rank, layout.rankCostGlobalOffset, costGlobal) ||
+        !ReadField(rank, layout.rankCostOffset, costByte)) {
         return false;
     }
+    if (costGlobal == 0) {
+        pointCost = costByte;
+        return true;
+    }
+    float cost{};
+    if (!ReadField(costGlobal, layout.globalValueOffset, cost) ||
+        !std::isfinite(cost) || cost <= -2147483648.0F ||
+        cost >= 2147483648.0F) {
+        return false;
+    }
+    pointCost = static_cast<std::int32_t>(std::trunc(cost));
     return true;
 }
 
@@ -234,9 +249,8 @@ enum class PerkCardReadResult {
             perkCard, layout.cardRaceRestrictionOffset,
             card.raceRestriction) ||
         !ReadField(perkCard, layout.cardGameModeOffset, card.gameMode) ||
-        !CallGetPerkCardRankPointCost(
-            runtime.getPerkCardRankPointCost, perkCard, rankIndex,
-            card.pointCost)) {
+        !ReadPerkCardRankPointCost(
+            layout, perkCard, rankIndex, card.pointCost)) {
         return PerkCardReadResult::Failed;
     }
 
@@ -364,10 +378,6 @@ constexpr std::array kPipBoyPerksRuntimeBindings{
         offsetof(ResolvedPipBoyPerksRuntime, getPerkDescriptionText),
         platform::AddressCheck::Executable),
     platform::Bind(
-        offsetof(config::NativePipBoyPerksProfile, getPerkCardRankPointCost),
-        offsetof(ResolvedPipBoyPerksRuntime, getPerkCardRankPointCost),
-        platform::AddressCheck::Executable),
-    platform::Bind(
         offsetof(config::NativePipBoyPerksProfile, deallocate),
         offsetof(ResolvedPipBoyPerksRuntime, deallocate),
         platform::AddressCheck::Executable),
@@ -399,6 +409,10 @@ bool ResolvePipBoyPerksRuntime(
         perks.formTypeOffset == 0 ||
         perks.perkCardFormType == 0 ||
         perks.perkCardFormType > 0xFF ||
+        perks.cardRanksOffset == 0 ||
+        perks.rankCostGlobalOffset == 0 ||
+        perks.rankCostOffset == 0 ||
+        perks.globalValueOffset == 0 ||
         !platform::ValidateVtable(
             virtualQuery, moduleBase, perks.localPlayerPrimaryVtable)) {
         return false;

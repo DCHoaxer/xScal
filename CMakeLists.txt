@@ -65,7 +65,6 @@ set(XSCAL_CORE_SOURCES
     src/datamanager/active_effect_snapshot.cpp
     src/datamanager/player_map_position_provider.cpp
     src/datamanager/player_map_position_snapshot.cpp
-    src/datamanager/time_data_provider.cpp
     src/datamanager/time_data_snapshot.cpp
     src/datamanager/actor_value_reader.cpp
     src/datamanager/local_player.cpp
@@ -73,24 +72,18 @@ set(XSCAL_CORE_SOURCES
     src/datamanager/game_read_lock.cpp
     src/datamanager/json_result_cache.cpp
     src/datamanager/form_text.cpp
-    src/datamanager/pip_boy_status_provider.cpp
+    src/datamanager/pip_boy_providers.cpp
     src/datamanager/pip_boy_status_snapshot.cpp
-    src/datamanager/pip_boy_player_info_provider.cpp
     src/datamanager/pip_boy_player_info_snapshot.cpp
-    src/datamanager/pip_boy_perks_provider.cpp
     src/datamanager/pip_boy_perks_snapshot.cpp
-    src/datamanager/pip_boy_quests_provider.cpp
     src/datamanager/pip_boy_quests_snapshot.cpp
     src/datamanager/pip_boy_inventory_provider.cpp
     src/datamanager/pip_boy_inventory_snapshot.cpp
-    src/datamanager/pip_boy_collections_provider.cpp
     src/datamanager/pip_boy_collections_snapshot.cpp
-    src/datamanager/pip_boy_radio_provider.cpp
-    src/datamanager/pip_boy_radio_snapshot.cpp
-    src/datamanager/pip_boy_special_provider.cpp
     src/datamanager/pip_boy_special_snapshot.cpp
     src/platform/diagnostics.cpp
     src/platform/native_access.cpp
+    src/platform/rtti_vtables.cpp
     src/platform/win32_file.cpp
     src/plugins/plugins.cpp
     src/plugins/plugin_signature.cpp
@@ -117,6 +110,7 @@ set(XSCAL_SEH_SOURCES
     src/hook/movie_root_router.cpp
     src/input/xinput_hook.cpp
     src/platform/native_access.cpp
+    src/platform/rtti_vtables.cpp
     src/plugins/plugins.cpp
     src/scaleform/native_handler.cpp
 )
