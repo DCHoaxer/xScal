@@ -3,6 +3,92 @@
 xScal enchances the game's Scaleform capabilities. 
 Proof of concept. 
 
+## Network access
+
+xScal connects to the internet for two features, described below. Both can be
+turned off in `xscal.ini`. xScal does not send telemetry or usage statistics,
+does not download or run code, and does not read or change the game's own
+network traffic.
+
+### Address Library update check
+
+**Purpose.** xScal needs a table of game addresses that matches the exact
+Fallout 76 executable. Every game patch changes these addresses, and without a
+matching table xScal stays inactive. The check fetches the table for a new
+game build, or a corrected table for the current build, so users do not have to
+wait for and install a manual download after each patch.
+
+**When it connects.**
+
+- At startup, when `Data\XSCAL\AddressLibrary\version-<game version>-<steam|gamepass>.bin`
+  is missing or cannot be used (unsigned, damaged, or made for another build
+  of the executable). This repeats on every launch until a usable file is
+  installed.
+- When a usable file is installed: at most once every 24 hours per game
+  version, and on the first launch after xScal itself is updated.
+
+**What it does.**
+
+1. On a background thread, it sends one HTTPS GET request to
+   `https://dcma.pl/addlib/v2/<file name>`, with 5-second timeouts. The file
+   name contains only the game version and store, for example
+   `version-1-7-27-11-steam.bin`. Nothing else is sent. As with any web
+   request, the server sees the IP address and the requested file name.
+2. It checks the response in memory before showing anything: a valid xScal
+   signature, the game version, the store, the executable timestamp and image
+   size, and the record format. A file that fails a check is discarded and the
+   reason is written to the xScal log. The file holds only address and constant
+   records; it cannot contain code.
+3. It asks before installing. A Yes/No dialog names the game version and, for
+   an update, the installed and new file revisions. A file is offered only when
+   it is newer than the installed one.
+   - **Yes** writes the file to `Data\XSCAL\AddressLibrary`. It is used after
+     Fallout 76 is restarted.
+   - **No** writes nothing. For an update, the declined file is recorded in a
+     `.declined` file and is not offered again; a later, newer file is offered.
+4. It records the time of the check in a `.checked` file next to the database.
+
+If the server has no file or cannot be reached, xScal logs it and continues
+with the installed file. When no usable file is installed, it shows an error
+dialog with the Nexus link below.
+
+**Turning it off.** Set `autoUpdate=false` in the `[AddressLibrary]` section.
+xScal then makes no request. Install the files yourself from
+https://www.nexusmods.com/fallout76/mods/4298/.
+
+Code: `DownloadAddressLibrary` and `Library::Parse` in
+[`src/address/address_library.cpp`](src/address/address_library.cpp),
+`OfferAddressLibraryDownload` and `RunBackgroundJob` in
+[`src/runtime/runtime.cpp`](src/runtime/runtime.cpp).
+
+### Chat relay for Fallout Chat Mod
+
+**Purpose.** xScal provides the native connection for Fallout Chat Mod's
+in-game chat. Chat messages travel between players through a relay server, so
+the feature cannot work without a connection.
+
+**When it connects.** Only after Fallout Chat Mod's interface asks xScal to
+connect. Without Fallout Chat Mod, xScal opens no chat connection. Once
+connected, it reconnects after a dropped connection, waiting 250 ms at first
+and up to 5 seconds between tries, until Fallout Chat Mod disconnects or the
+game exits.
+
+**What it sends.** Over a TLS WebSocket to `wss://falloutchatmod.com/relay`:
+the display name and client version that Fallout Chat Mod provides, the
+session token issued by the relay, and the messages, reports, and moderation
+actions the player sends. Nothing else is sent.
+
+**What it stores.** The session token, in `Data\XSCAL\chat-auth.bin`,
+encrypted with Windows DPAPI for the current Windows user. Logging out deletes
+the file.
+
+**Turning it off.** Set `enabled=false` in the `[Chat]` section.
+`relayEndpoint` changes the server; only `wss://` addresses are accepted.
+
+Code: [`src/chat/`](src/chat/), with the connection in
+[`src/chat/relay_connection.cpp`](src/chat/relay_connection.cpp) and the
+exact messages in [`src/chat/relay_protocol.cpp`](src/chat/relay_protocol.cpp).
+
 ## Source layout
 
 - `src/address`: Address library loading
