@@ -16,6 +16,8 @@ public:
         std::uint32_t sessionId{};
         std::uint32_t revision{};
         std::string text;
+        // UTF-16 code-unit offset into text, matching AS3 String indexes.
+        std::uint32_t caretIndex{};
         TextInputStatus status{TextInputStatus::Active};
     };
     struct MouseSnapshot final {

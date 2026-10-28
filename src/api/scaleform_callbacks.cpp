@@ -550,7 +550,7 @@ template <GamepadAnalogOperation kOperation>
     try {
         std::string payload{"{\"success\":true,\"sessionId\":"};
         payload.append(std::to_string(snapshot.sessionId));
-        payload.append(",\"revision\":0,\"text\":\"\",\"state\":\"active\"}");
+        payload.append(",\"revision\":0,\"text\":\"\",\"caretIndex\":0,\"state\":\"active\"}");
         return call.result->SetString(payload);
     } catch (...) {
         (void)targets.input.EndTextInput(sessionId);
@@ -584,6 +584,8 @@ template <GamepadAnalogOperation kOperation>
         payload.append(std::to_string(snapshot.revision));
         payload.append(",\"text\":");
         json::AppendString(snapshot.text, payload);
+        payload.append(",\"caretIndex\":");
+        payload.append(std::to_string(snapshot.caretIndex));
         payload.append(",\"state\":\"");
         payload.append(state);
         payload.append("\"}");

@@ -599,6 +599,7 @@ bool InputState::PollTextInput(
     }
     snapshot.sessionId = sessionId;
     snapshot.revision = textInputRevision_;
+    snapshot.caretIndex = static_cast<std::uint32_t>(textInputCursor_);
     snapshot.status = textInputStatus_;
     return true;
 }
@@ -668,12 +669,16 @@ bool InputState::FilterKeyboardMessage(
             changed = true;
         } else if (key == VK_LEFT && textInputCursor_ != 0) {
             textInputCursor_ = PreviousCharacter(textInputText_, textInputCursor_);
+            changed = true;
         } else if (key == VK_RIGHT && textInputCursor_ < textInputText_.size()) {
             textInputCursor_ = NextCharacter(textInputText_, textInputCursor_);
-        } else if (key == VK_HOME) {
+            changed = true;
+        } else if (key == VK_HOME && textInputCursor_ != 0) {
             textInputCursor_ = 0;
-        } else if (key == VK_END) {
+            changed = true;
+        } else if (key == VK_END && textInputCursor_ != textInputText_.size()) {
             textInputCursor_ = textInputText_.size();
+            changed = true;
         }
         if (changed) {
             ++textInputRevision_;
