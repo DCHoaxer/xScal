@@ -1,5 +1,6 @@
 #include "input/input_state.hpp"
 
+#include "input/hid_gamepad.hpp"
 #include "input/xinput_hook.hpp"
 
 #include <Windows.h>
@@ -210,7 +211,22 @@ LRESULT CALLBACK SubclassInstallHook(
     snapshot = {};
     XINPUT_STATE state{};
     if (::XInputGetState(userIndex, &state) != ERROR_SUCCESS) {
-        return false;
+        // HID gamepads take the indices XInput leaves empty, in the order
+        // they were opened. Gamepad suppression filters only the game's
+        // XInput calls, so it has no effect on these indices.
+        const std::size_t hidGamepadCount = CountHidGamepads();
+        if (hidGamepadCount == 0) {
+            return false;
+        }
+        std::size_t padIndex{};
+        for (DWORD lowerIndex = 0; lowerIndex < userIndex; ++lowerIndex) {
+            XINPUT_STATE lowerState{};
+            if (::XInputGetState(lowerIndex, &lowerState) != ERROR_SUCCESS) {
+                ++padIndex;
+            }
+        }
+        return padIndex < hidGamepadCount &&
+            ReadHidGamepadState(padIndex, snapshot);
     }
     snapshot.buttons = state.Gamepad.wButtons;
     snapshot.leftTrigger = state.Gamepad.bLeftTrigger;

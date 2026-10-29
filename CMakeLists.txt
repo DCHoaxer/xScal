@@ -89,6 +89,7 @@ set(XSCAL_CORE_SOURCES
     src/plugins/plugin_signature.cpp
     src/hook/movie_root_hook.cpp
     src/hook/movie_root_router.cpp
+    src/input/hid_gamepad.cpp
     src/input/gamepad_suppression.cpp
     src/input/xinput_hook.cpp
     src/modules/core/core_module.cpp
@@ -171,6 +172,8 @@ target_include_directories(dxgi PRIVATE
 target_link_libraries(dxgi PRIVATE
     version
     xinput
+    hid
+    setupapi
     winhttp
     crypt32
     comctl32)
