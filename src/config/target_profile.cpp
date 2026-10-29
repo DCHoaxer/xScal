@@ -1087,6 +1087,12 @@ bool ReadTargetProfile(
     if (!ReadRva(addresses, XSCAL_ADDRESS_SCALEFORM_INVOKE, result.invokeOffset)) {
         result.invokeOffset = 0;
     }
+    if (!ReadRva(
+            addresses,
+            XSCAL_ADDRESS_SCE_PAD_BLUETOOTH_ENABLED_GLOBAL,
+            result.scePadBluetoothFlagOffset)) {
+        result.scePadBluetoothFlagOffset = 0;
+    }
 
     ReadStatsEffectsProfile(addresses, result.dataManager.pipBoyStatsEffects);
     ReadEnemyMeterProfile(addresses, result.dataManager.enemyMeter);

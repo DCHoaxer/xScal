@@ -30,7 +30,8 @@ public:
         bool rightPressed{};
         bool capturing{};
     };
-    // Physical XInput state, read before any suppression is applied.
+    // Physical controller state in the XInput layout, read before any
+    // suppression is applied. DualSense controllers are read from HID.
     struct GamepadSnapshot final {
         std::uint16_t buttons{};
         std::uint8_t leftTrigger{};

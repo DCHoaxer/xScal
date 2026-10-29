@@ -98,7 +98,7 @@ exact messages in [`src/chat/relay_protocol.cpp`](src/chat/relay_protocol.cpp).
 - `src/config`: Config, EXE profiles and updateable RVAs
 - `src/datamanager`: Pip-Boy effect and time data providers
 - `src/hook`: Vtable stuf MovieRoot routing, and other stuff... and things
-- `src/input`: XInput hook, input state and gamepad suppression
+- `src/input`: XInput hook, HID gamepad reader, input state and gamepad suppression
 - `src/modules`: Built-in core and priority modules
 - `src/platform`: Windows memory validation and diagnostics (i'm not even using windows)
 - `src/plugins`: Plugin loading and signature checks

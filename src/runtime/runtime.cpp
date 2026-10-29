@@ -507,6 +507,13 @@ VtableHookStatus Runtime::Initialize(
         DiagnosticLogFormat(
             "xScal GamepadInputFilter: %s",
             VtableHookStatusName(gamepadFilterStatus));
+        if (gamepadFilterStatus == VtableHookStatus::Installed) {
+            (void)gamepadInputFilter_.ForwardGamepads();
+            if (profile.scePadBluetoothFlagOffset != 0) {
+                (void)gamepadInputFilter_.EnableScePadBluetooth(
+                    moduleBase + profile.scePadBluetoothFlagOffset);
+            }
+        }
         enemy_meter::ConfigureNativeRuntime(
             profile.dataManager.enemyMeter, moduleBase);
         const bool statsEffectsInstalled =

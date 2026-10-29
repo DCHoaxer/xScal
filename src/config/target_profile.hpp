@@ -430,6 +430,9 @@ struct TargetProfile final {
     bool pipBoyQuestsEnabled;
     bool pipBoyInventoryEnabled;
     bool pipBoyCollectionsEnabled;
+    // libScePad Bluetooth enable flag. Zero when the Address Library has no
+    // record.
+    std::uintptr_t scePadBluetoothFlagOffset;
 
     [[nodiscard]] constexpr bool operator==(
         const TargetProfile&) const noexcept = default;
