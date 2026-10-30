@@ -1,6 +1,7 @@
 #include "plugins/plugins.hpp"
 
 #include "xscal/plugin_api.h"
+#include "address/address_library_v3.hpp"
 #include "common/json.hpp"
 #include "config/target_profile.hpp"
 #include "platform/diagnostics.hpp"
@@ -15,6 +16,7 @@
 #include <cwchar>
 #include <deque>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -668,10 +670,56 @@ private:
     HANDLE handle_;
 };
 
+struct MessageDialog final {
+    std::wstring text;
+    UINT icon;
+};
+
+// Shown from a new thread so the game's device creation does not wait for
+// the player to close the box.
+void ShowRevocationMessage(const address::v3::Message& message, const std::wstring& path) noexcept {
+    FILETIME now{};
+    ::GetSystemTimeAsFileTime(&now);
+    const std::uint64_t nowFileTime =
+        (static_cast<std::uint64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+    if (!address::v3::ClaimMessage(message, nowFileTime)) return;
+    std::unique_ptr<MessageDialog> dialog;
+    try {
+        dialog = std::make_unique<MessageDialog>();
+        const std::size_t slash = path.find_last_of(L"\\/");
+        const std::wstring lead = L"The plugin " +
+            (slash == std::wstring::npos ? path : path.substr(slash + 1)) + L" was not loaded.";
+        if (!address::v3::BuildMessageText(message, lead, dialog->text, dialog->icon))
+            return;
+    } catch (...) {
+        return;
+    }
+    const HANDLE thread = ::CreateThread(
+        nullptr, 0,
+        [](LPVOID parameter) -> DWORD {
+            std::unique_ptr<MessageDialog> dialog{static_cast<MessageDialog*>(parameter)};
+            (void)::MessageBoxW(
+                nullptr, dialog->text.c_str(), L"xScal", MB_OK | dialog->icon);
+            return 0;
+        },
+        dialog.get(), 0, nullptr);
+    if (thread == nullptr) return;
+    (void)dialog.release();
+    (void)::CloseHandle(thread);
+}
+
 void LogSignatureRejection(
     const std::wstring& path,
     const signing::SignatureResult& result) noexcept {
     const char* reason = signing::DescribeCheck(result.check);
+    address::v3::OnlineRejection online{};
+    if (address::v3::FindOnlineRejection(result, online)) {
+        DiagnosticLogFormatImmediate(
+            "xScal plugin '%ls': %s (developer %u, online revocation: %s)",
+            path.c_str(), reason, result.developerId, online.reason);
+        if (online.message != nullptr) ShowRevocationMessage(*online.message, path);
+        return;
+    }
     switch (result.check) {
     case signing::SignatureCheck::DeveloperRevoked:
     case signing::SignatureCheck::BadCertificate:
@@ -1068,6 +1116,7 @@ bool SetPluginOption(
 
 BOOL CALLBACK LoadModules(PINIT_ONCE, PVOID, PVOID*) noexcept {
     ClearDiagnosticLog();
+    address::v3::ApplyCachedRevocations();
     inPluginCall = true;
     if (initializeHost && !initializeHost()) {
         DiagnosticLogImmediate(

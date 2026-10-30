@@ -23,9 +23,9 @@ struct RuntimeProcessPlatform final {
     using ReadRuntimeVersionFn = bool(*)(
         const wchar_t* executablePath,
         config::RuntimeVersion& version) noexcept;
+    // path is the request path on dcma.pl, e.g. "/addlib/v3/addlib.json".
     using DownloadAddressLibraryFn = bool(*)(
-        TargetKind target,
-        const config::RuntimeVersion& runtime,
+        const char* path,
         std::string& contents) noexcept;
 
     using ReadExecutableIdentityFn = bool(*)(

@@ -27,7 +27,7 @@ constexpr std::size_t kMaximumHeaderSize = 4096;
 constexpr std::size_t kMaximumEntrySize = 256;
 constexpr std::uint32_t kMaximumVersion = 0xFFFFFF;
 // 24 hours in FILETIME units of 100 ns.
-constexpr std::uint64_t kUpdateCheckInterval = 24ull * 3600 * 10'000'000;
+constexpr std::uint64_t kFileTimeHour = 3600ull * 10'000'000;
 
 // Reads a marker file into text. False when the file is missing or unreadable.
 [[nodiscard]] bool ReadMarker(
@@ -148,23 +148,20 @@ bool ReadExecutableIdentity(
     return true;
 }
 
-bool DownloadAddressLibrary(
-    TargetKind target,
-    const config::RuntimeVersion& runtime,
+bool DownloadAddressLibraryFile(
+    const char* path,
     std::string& contents) noexcept {
     contents.clear();
-    std::array<wchar_t, 96> fileName{};
-    std::array<wchar_t, 160> requestPath{};
-    if (!FormatFileName(target, runtime, L"bin", fileName)) {
-        return false;
+    std::array<wchar_t, 200> requestPath{};
+    std::size_t length = 0;
+    for (; path != nullptr && path[length] != '\0'; ++length) {
+        const unsigned char character = static_cast<unsigned char>(path[length]);
+        if (length + 1 >= requestPath.size() || character < 0x20 || character > 0x7E) {
+            return false;
+        }
+        requestPath[length] = static_cast<wchar_t>(character);
     }
-    const int pathLength = std::swprintf(
-        requestPath.data(),
-        requestPath.size(),
-        L"/addlib/v2/%ls",
-        fileName.data());
-    if (pathLength <= 0 ||
-        static_cast<std::size_t>(pathLength) >= requestPath.size()) {
+    if (length == 0) {
         return false;
     }
 
@@ -298,7 +295,8 @@ bool StoreDeclinedUpdate(
 bool IsUpdateCheckDue(
     TargetKind target,
     const config::RuntimeVersion& runtime,
-    std::uint64_t nowFileTime) noexcept {
+    std::uint64_t nowFileTime,
+    std::uint32_t intervalHours) noexcept {
     std::string text;
     unsigned long long checkedAt{};
     unsigned int major{}, minor{}, patch{};
@@ -313,7 +311,7 @@ bool IsUpdateCheckDue(
         return true;
     }
     return checkedAt > nowFileTime ||
-        nowFileTime - checkedAt >= kUpdateCheckInterval;
+        nowFileTime - checkedAt >= intervalHours * kFileTimeHour;
 }
 
 bool StoreUpdateCheck(

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 // Plugin signature files and the checks xScal runs on them before loading a
 // plugin DLL. xscal-sign uses the same structures and functions to write and
@@ -63,6 +64,15 @@ inline constexpr std::size_t kPluginSignatureSignedSize =
 [[nodiscard]] std::span<const std::uint32_t> RevokedDeveloperIds() noexcept;
 [[nodiscard]] std::span<const Hash> RevokedPluginHashes() noexcept;
 
+// Online revocations from addlib.json. They are checked in
+// addition to the compiled lists and cannot remove a compiled entry. Call
+// this before the first plugin or database is checked; a later call replaces
+// the lists. Returns false when memory ran out, which leaves no online
+// entries.
+[[nodiscard]] bool SetOnlineRevocations(
+    std::span<const std::uint32_t> developerIds,
+    std::span<const Hash> pluginHashes) noexcept;
+
 enum class SignatureCheck {
     Valid,
     MissingSignature,     // no <dll>.sig file
@@ -86,6 +96,9 @@ struct SignatureResult {
     char idPrefix[kIdPrefixCapacity] = {};
     // Filled once the DLL has been hashed.
     Hash fileHash{};
+    // True when DeveloperRevoked or BuildRevoked came from the online list
+    // set with SetOnlineRevocations and not from the compiled lists.
+    bool onlineRevocation = false;
 };
 
 // Checks the DLL open in dllFile against signatureFile. dllFile is read from
@@ -102,6 +115,16 @@ struct SignatureResult {
     const void* data,
     std::size_t size,
     const PluginSignature& signature) noexcept;
+
+// Checks an ECDSA signature made by RootPublicKeys()[rootKeyIndex] over the
+// SHA-256 of context, one zero byte, then the data. Returns Valid,
+// UnknownRootKey, BadSignature or CryptoError.
+[[nodiscard]] SignatureCheck CheckRootSignedData(
+    std::string_view context,
+    const void* data,
+    std::size_t size,
+    std::size_t rootKeyIndex,
+    const std::uint8_t (&signature)[kSignatureSize]) noexcept;
 
 // Short reason text for log lines, e.g. "developer revoked".
 [[nodiscard]] const char* DescribeCheck(SignatureCheck check) noexcept;
