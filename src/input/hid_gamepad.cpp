@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cwctype>
 #include <memory>
 #include <mutex>
@@ -55,6 +56,10 @@ constexpr std::size_t kMaxGamepads = 4;
 // Device scans run on the reader thread while fewer than kMaxGamepads
 // gamepads are open.
 constexpr ULONGLONG kScanIntervalMs = 2'000;
+
+// DirectInput gamepads have 10 to 16 buttons. Flight sticks, throttles and
+// wheels usually have more.
+constexpr std::size_t kMaxJoystickButtons = 16;
 
 // Hat values 0 to 7 run clockwise from up. Other values mean released.
 constexpr std::array<std::uint16_t, 8> kHatButtons{
@@ -278,6 +283,7 @@ struct Gamepad final {
     std::array<GenericField, GenericGamepadReport::AxisCount> axisFields{};
     GenericField hatField;
     GenericGamepadReport generic;
+    bool hasSliderDialOrWheel{};
 };
 
 // Finds the axes and hat switch in the device's value capabilities.
@@ -309,6 +315,10 @@ struct Gamepad final {
             } else if (usage == HID_USAGE_GENERIC_HATSWITCH) {
                 value = &gamepad.generic.hat;
                 field = &gamepad.hatField;
+            } else if (usage >= HID_USAGE_GENERIC_SLIDER &&
+                       usage <= HID_USAGE_GENERIC_WHEEL) {
+                gamepad.hasSliderDialOrWheel = true;
+                continue;
             } else {
                 continue;
             }
@@ -332,9 +342,43 @@ struct Gamepad final {
     }
     gamepad.pressedButtons.resize(::HidP_MaxUsageListLength(
         HidP_Input, HID_USAGE_PAGE_BUTTON, gamepad.preparsedData));
-    return !gamepad.pressedButtons.empty() ||
-        (gamepad.generic.axes[GenericGamepadReport::X].present &&
-            gamepad.generic.axes[GenericGamepadReport::Y].present);
+    return true;
+}
+
+// Logs the IDs and value ranges of a generic device, so a device that is
+// read as a gamepad, or skipped, can be checked against its layout.
+void LogGenericLayout(
+    const Gamepad& gamepad,
+    const HIDD_ATTRIBUTES& attributes,
+    bool joystickUsage,
+    bool read) noexcept {
+    constexpr std::array<const char*, GenericGamepadReport::AxisCount>
+        kAxisNames{"X", "Y", "Z", "Rx", "Ry", "Rz"};
+    std::string ranges;
+    char range[64]{};
+    const auto appendRange = [&](const char* name,
+                                 const GenericGamepadValue& value) {
+        if (!value.present) {
+            return;
+        }
+        std::snprintf(
+            range, sizeof(range), " %s %ld..%ld", name,
+            static_cast<long>(value.minimum), static_cast<long>(value.maximum));
+        ranges += range;
+    };
+    for (std::size_t axis = 0; axis < kAxisNames.size(); ++axis) {
+        appendRange(kAxisNames[axis], gamepad.generic.axes[axis]);
+    }
+    appendRange("hat", gamepad.generic.hat);
+    DiagnosticLogFormat(
+        "xScal HID gamepad: %s %04X:%04X, %s usage, %u buttons,%s%s",
+        read ? "reading" : "skipped",
+        static_cast<unsigned int>(attributes.VendorID),
+        static_cast<unsigned int>(attributes.ProductID),
+        joystickUsage ? "joystick" : "gamepad",
+        static_cast<unsigned int>(gamepad.pressedButtons.size()),
+        ranges.empty() ? " no axes" : ranges.c_str(),
+        gamepad.hasSliderDialOrWheel ? ", slider, dial or wheel" : "");
 }
 
 void ReadGenericValue(
@@ -599,10 +643,20 @@ private:
         gamepad->wirelessAdapter =
             attributes.VendorID == kSonyVendorId &&
             attributes.ProductID == kDualShock4WirelessAdapterProductId;
-        if (gamepad->kind == GamepadKind::Generic &&
-            !ReadGenericLayout(*gamepad, caps)) {
-            ignoredPaths_.push_back(std::move(path));
-            return;
+        const bool joystickUsage = caps.Usage == HID_USAGE_GENERIC_JOYSTICK;
+        if (gamepad->kind == GamepadKind::Generic) {
+            if (!ReadGenericLayout(*gamepad, caps)) {
+                ignoredPaths_.push_back(std::move(path));
+                return;
+            }
+            if (!IsGenericGamepad(
+                    gamepad->generic, joystickUsage,
+                    gamepad->pressedButtons.size(),
+                    gamepad->hasSliderDialOrWheel)) {
+                LogGenericLayout(*gamepad, attributes, joystickUsage, false);
+                ignoredPaths_.push_back(std::move(path));
+                return;
+            }
         }
 
         gamepad->file = ::CreateFileW(
@@ -617,6 +671,9 @@ private:
         gamepad->readDone = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
         if (gamepad->readDone == nullptr || !StartRead(*gamepad)) {
             return;
+        }
+        if (gamepad->kind == GamepadKind::Generic) {
+            LogGenericLayout(*gamepad, attributes, joystickUsage, true);
         }
         gamepads_.push_back(std::move(gamepad));
         PublishStates();
@@ -738,6 +795,24 @@ InputState::GamepadSnapshot ConvertGenericGamepadReport(
         rightTrigger, (report.buttons & kGenericRightTriggerButton) != 0);
     snapshot.connected = true;
     return snapshot;
+}
+
+bool IsGenericGamepad(
+    const GenericGamepadReport& report,
+    bool joystickUsage,
+    std::size_t buttonCount,
+    bool hasSliderDialOrWheel) noexcept {
+    using Axis = GenericGamepadReport::Axis;
+    const auto& axes = report.axes;
+    const bool hasLeftStick = axes[Axis::X].present && axes[Axis::Y].present;
+    if (!joystickUsage) {
+        return buttonCount > 0 || hasLeftStick;
+    }
+    const bool hasRightStick =
+        (axes[Axis::Z].present && axes[Axis::Rz].present) ||
+        (axes[Axis::Rx].present && axes[Axis::Ry].present);
+    return hasLeftStick && hasRightStick && buttonCount > 0 &&
+        buttonCount <= kMaxJoystickButtons && !hasSliderDialOrWheel;
 }
 
 std::size_t CountHidGamepads() noexcept {

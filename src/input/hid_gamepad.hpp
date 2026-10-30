@@ -53,6 +53,18 @@ struct GenericGamepadReport final {
 [[nodiscard]] InputState::GamepadSnapshot ConvertGenericGamepadReport(
     const GenericGamepadReport& report) noexcept;
 
+// Devices with the HID Joystick usage include flight sticks, throttles,
+// pedals and wheels, whose axes can rest at one end of their range and
+// would hold a stick deflected. They are read only when they have both
+// sticks, 1 to 16 buttons and no slider, dial or wheel axis, which is the
+// layout of DirectInput gamepads. A Gamepad usage device needs buttons or
+// an X and Y axis.
+[[nodiscard]] bool IsGenericGamepad(
+    const GenericGamepadReport& report,
+    bool joystickUsage,
+    std::size_t buttonCount,
+    bool hasSliderDialOrWheel) noexcept;
+
 // Number of HID gamepads the reader has open. The first call starts the
 // reader thread, which runs until the process exits.
 [[nodiscard]] std::size_t CountHidGamepads() noexcept;
