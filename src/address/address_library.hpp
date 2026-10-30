@@ -42,9 +42,10 @@ struct ExecutableIdentity final {
     std::uintptr_t moduleBase,
     ExecutableIdentity& identity) noexcept;
 
-[[nodiscard]] bool DownloadAddressLibrary(
-    TargetKind target,
-    const config::RuntimeVersion& runtime,
+// GET https://dcma.pl<path> with 5 s timeouts. At most 1 MiB is read. False
+// on any network error, a status other than 200, or an empty or larger body.
+[[nodiscard]] bool DownloadAddressLibraryFile(
+    const char* path,
     std::string& contents) noexcept;
 [[nodiscard]] bool StoreAddressLibrary(
     TargetKind target,
@@ -67,11 +68,12 @@ struct ExecutableIdentity final {
 // The "checked" marker stores when the server was last asked about this
 // runtime (a FILETIME as a decimal number) and the xScal version that asked.
 // A check is due when the marker is missing or unreadable, was written by
-// another xScal version, is 24 hours or more old, or lies in the future.
+// another xScal version, is intervalHours or more old, or lies in the future.
 [[nodiscard]] bool IsUpdateCheckDue(
     TargetKind target,
     const config::RuntimeVersion& runtime,
-    std::uint64_t nowFileTime) noexcept;
+    std::uint64_t nowFileTime,
+    std::uint32_t intervalHours) noexcept;
 [[nodiscard]] bool StoreUpdateCheck(
     TargetKind target,
     const config::RuntimeVersion& runtime,

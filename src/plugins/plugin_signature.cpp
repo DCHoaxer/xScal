@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstring>
+#include <vector>
 
 namespace sf::plugins::signing {
 namespace {
@@ -81,6 +82,10 @@ BOOL CALLBACK LoadCng(PINIT_ONCE, PVOID, PVOID*) noexcept {
     return cng.status;
 }
 
+// Written by SetOnlineRevocations before plugins and databases are checked.
+std::vector<std::uint32_t> onlineDevelopers;
+std::vector<Hash> onlineBuilds;
+
 [[nodiscard]] bool ReadExact(HANDLE file, void* buffer, DWORD size) noexcept {
     DWORD read = 0;
     return ::ReadFile(file, buffer, size, &read, nullptr) && read == size;
@@ -142,6 +147,12 @@ template <typename HashContent>
         result.check = SignatureCheck::DeveloperRevoked;
         return result;
     }
+    if (std::find(onlineDevelopers.begin(), onlineDevelopers.end(),
+            certificate.developerId) != onlineDevelopers.end()) {
+        result.check = SignatureCheck::DeveloperRevoked;
+        result.onlineRevocation = true;
+        return result;
+    }
 
     std::uint64_t contentSize = 0;
     status = hashContent(contentSize, result.fileHash);
@@ -158,6 +169,12 @@ template <typename HashContent>
         result.check = SignatureCheck::BuildRevoked;
         return result;
     }
+    if (std::find(onlineBuilds.begin(), onlineBuilds.end(),
+            result.fileHash) != onlineBuilds.end()) {
+        result.check = SignatureCheck::BuildRevoked;
+        result.onlineRevocation = true;
+        return result;
+    }
 
     status = HashBytes(&file, kPluginSignatureSignedSize, digest);
     if (status >= 0)
@@ -171,6 +188,20 @@ template <typename HashContent>
 
 
 }  // namespace
+
+bool SetOnlineRevocations(
+    std::span<const std::uint32_t> developerIds,
+    std::span<const Hash> pluginHashes) noexcept {
+    try {
+        onlineDevelopers.assign(developerIds.begin(), developerIds.end());
+        onlineBuilds.assign(pluginHashes.begin(), pluginHashes.end());
+        return true;
+    } catch (...) {
+        onlineDevelopers.clear();
+        onlineBuilds.clear();
+        return false;
+    }
+}
 
 long HashBytes(const void* data, std::size_t size, Hash& hash) noexcept {
     long status = LoadCngOnce();
@@ -285,6 +316,37 @@ SignatureResult CheckSignedData(
         hashedSize = size;
         return HashBytes(data, size, hash);
     });
+}
+
+SignatureCheck CheckRootSignedData(
+    std::string_view context,
+    const void* data,
+    std::size_t size,
+    std::size_t rootKeyIndex,
+    const std::uint8_t (&signature)[kSignatureSize]) noexcept {
+    const auto rootKeys = RootPublicKeys();
+    if (rootKeyIndex >= rootKeys.size())
+        return SignatureCheck::UnknownRootKey;
+    std::vector<std::uint8_t> signedBytes;
+    try {
+        signedBytes.reserve(context.size() + 1 + size);
+        signedBytes.insert(signedBytes.end(), context.begin(), context.end());
+        signedBytes.push_back(0);
+        const auto* bytes = static_cast<const std::uint8_t*>(data);
+        signedBytes.insert(signedBytes.end(), bytes, bytes + size);
+    } catch (...) {
+        return SignatureCheck::CryptoError;
+    }
+    Hash digest{};
+    long status = HashBytes(signedBytes.data(), signedBytes.size(), digest);
+    if (status >= 0) {
+        std::uint8_t rootKey[kPublicKeySize];
+        std::memcpy(rootKey, rootKeys[rootKeyIndex].data(), sizeof(rootKey));
+        status = VerifyDigest(rootKey, digest, signature);
+    }
+    if (status == kStatusInvalidSignature)
+        return SignatureCheck::BadSignature;
+    return status < 0 ? SignatureCheck::CryptoError : SignatureCheck::Valid;
 }
 
 const char* DescribeCheck(SignatureCheck check) noexcept {

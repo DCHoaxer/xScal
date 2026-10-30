@@ -5,6 +5,7 @@
 
 #include "address/address_library.hpp"
 #include "address/address_library_key.hpp"
+#include "address/address_library_v3.hpp"
 #include "api/internal/enemy_meter_data.hpp"
 #include "api/mod_storage.hpp"
 #include "api/scaleform_callbacks.hpp"
@@ -20,6 +21,7 @@
 #include <cwchar>
 #include <memory>
 #include <new>
+#include <string>
 #include <vector>
 
 namespace sf {
@@ -114,30 +116,49 @@ void ShowRuntimeVersionError(
         MB_OK | MB_ICONEXCLAMATION);
 }
 
-// Displays a message box indicating that the Address Library is missing or invalid. 
+// Displays a message box indicating that the Address Library is missing or
+// invalid. The dialog is the base for addlib.json messages: explanation (the
+// block message, or the message of the build's event) replaces everything
+// between the runtime line and the closing line; without one, the dialog
+// keeps its own "What went wrong?" paragraph. The Always message comes
+// before the closing line.
 void ShowAddressLibraryError(
     const RuntimeProcessPlatform& platform,
-    const config::RuntimeVersion& found) noexcept {
+    const config::RuntimeVersion& found,
+    const address::v3::Message* explanation = nullptr,
+    const address::v3::Message* always = nullptr) noexcept {
     const auto runtimeText = FormatRuntimeVersion(found);
-    std::array<wchar_t, 1024> message{};
-    std::swprintf(message.data(), message.size(),
-        L"Oh no. The Address Library has flatlined.\n\n"
-        L"Fallout 76 runtime: %hs\n\n"
+    std::array<wchar_t, 64> runtime{};
+    std::swprintf(runtime.data(), runtime.size(), L"%hs", runtimeText.data());
+    UINT icon{};
+    std::wstring serverText;
+    if (explanation != nullptr && !address::v3::BuildMessageText(*explanation, {}, serverText, icon)) {
+        serverText.clear();
+    }
+    std::wstring alwaysText;
+    if (always != nullptr && !address::v3::BuildMessageText(*always, {}, alwaysText, icon)) {
+        alwaysText.clear();
+    }
+    const wchar_t* const defaultText =
         L"What went wrong?\n"
         L"xScal tried to read the Address Library and immediately regretted being born. "
-        L"Missing or invalid Address Library for this runtime.\n\n"
-        L"Wait for xscal to automatically download it if the new database is available:\n"
-        L"If not, you can wait, or manually download the latest Address Library from NexusMods (if published):\n"
-        L"https://www.nexusmods.com/fallout76/mods/4298/\n\n"
-        L"Note that I am publishing the adress library manually, so it may take some time "
-        L"after update for the new version to be available.\n\n"
-        L"xScal features are now taking an unpaid vacation for this session.",
-        runtimeText.data());
-    platform.messageBox(
-        nullptr,
-        message.data(),
-        L"xScal",
-        MB_OK | MB_ICONEXCLAMATION);
+        L"Missing or invalid Address Library for this runtime.";
+    try {
+        const std::wstring message =
+            L"Oh no. The Address Library has flatlined.\n\n"
+            L"Fallout 76 runtime: " + std::wstring(runtime.data()) + L"\n\n" +
+            (serverText.empty() ? std::wstring(defaultText) : serverText) + L"\n\n" +
+            (alwaysText.empty() ? std::wstring() : alwaysText + L"\n\n") +
+            L"xScal features are now taking an unpaid vacation for this session.";
+        platform.messageBox(nullptr, message.c_str(), L"xScal", MB_OK | MB_ICONEXCLAMATION);
+    } catch (...) {
+        platform.messageBox(
+            nullptr,
+            L"Oh no. The Address Library has flatlined.\n\n"
+            L"xScal features are now taking an unpaid vacation for this session.",
+            L"xScal",
+            MB_OK | MB_ICONEXCLAMATION);
+    }
 }
 
 // The file an installed database was published as.
@@ -175,10 +196,101 @@ void LogAddressLibraryRejection(
     }
 }
 
-// Downloads the server's database for this runtime and writes it after the
-// user agrees. With installed set, the download is offered only when its
-// release and revision are newer than the installed file's and the user has
-// not declined that file.
+// Downloads addlib.json and stores each part that verifies and has a higher
+// sequence than the cached one. status gets the newly accepted status, or
+// the cached one when the download has nothing newer. False when there is
+// no usable status.
+[[nodiscard]] bool ReadServerStatus(
+    const RuntimeProcessPlatform& platform,
+    address::v3::Status& status) noexcept {
+    namespace v3 = address::v3;
+    std::string text;
+    if (!platform.downloadAddressLibrary(v3::kAddlibPath.data(), text)) {
+        DiagnosticLog("Address Library: addlib.json could not be downloaded");
+        return false;
+    }
+    v3::RawFile file;
+    const char* detail = nullptr;
+    if (!v3::SplitFile(text, file, detail)) {
+        DiagnosticLogFormat("Address Library: addlib.json rejected (%s)", detail);
+        text.clear();
+    }
+
+    v3::Status cached;
+    const bool hasCached = v3::LoadCachedStatus(cached);
+    v3::Revocations cachedRevocations;
+    const bool hasCachedRevocations = v3::LoadCachedRevocations(cachedRevocations);
+
+    if (file.hasRevocations) {
+        v3::Revocations fresh;
+        const auto check = v3::CheckRevocationsPart(
+            file.revocations,
+            hasCachedRevocations ? cachedRevocations.sequence : 0,
+            fresh,
+            detail);
+        if (check == v3::PartCheck::Accepted) {
+            if (v3::StoreRevocationsPart(file.revocations)) {
+                DiagnosticLogFormat(
+                    "Address Library: revocations sequence %llu accepted, used from the next launch",
+                    static_cast<unsigned long long>(fresh.sequence));
+            } else {
+                DiagnosticLogFormat(
+                    "Address Library: v3-revocations.json could not be written (Windows error %lu)",
+                    ::GetLastError());
+            }
+        } else if (check == v3::PartCheck::NotNewer) {
+            DiagnosticLogFormat(
+                "Address Library: revocations sequence %llu is not newer than the cached %llu",
+                static_cast<unsigned long long>(fresh.sequence),
+                static_cast<unsigned long long>(
+                    hasCachedRevocations ? cachedRevocations.sequence : 0));
+        } else {
+            DiagnosticLogFormat("Address Library: revocations part rejected (%s)", detail);
+        }
+    } else if (file.revocationsDetail != nullptr && !text.empty()) {
+        DiagnosticLogFormat(
+            "Address Library: revocations part rejected (%s)", file.revocationsDetail);
+    }
+
+    if (file.hasStatus) {
+        v3::Status fresh;
+        const auto check = v3::CheckStatusPart(
+            file.status, hasCached ? cached.sequence : 0, fresh, detail);
+        if (check == v3::PartCheck::Accepted) {
+            if (!v3::StoreStatusPart(file.status)) {
+                DiagnosticLogFormat(
+                    "Address Library: v3-status.json could not be written (Windows error %lu)",
+                    ::GetLastError());
+            }
+            DiagnosticLogFormat(
+                "Address Library: status sequence %llu accepted",
+                static_cast<unsigned long long>(fresh.sequence));
+            status = std::move(fresh);
+            return true;
+        }
+        if (check == v3::PartCheck::NotNewer) {
+            DiagnosticLogFormat(
+                "Address Library: status sequence %llu is not newer than the cached %llu",
+                static_cast<unsigned long long>(fresh.sequence),
+                static_cast<unsigned long long>(hasCached ? cached.sequence : 0));
+        } else {
+            DiagnosticLogFormat("Address Library: status part rejected (%s)", detail);
+        }
+    } else if (!text.empty()) {
+        DiagnosticLogFormat("Address Library: status part rejected (%s)", file.statusDetail);
+    }
+    if (!hasCached) {
+        DiagnosticLog("Address Library: no accepted status, nothing to offer");
+        return false;
+    }
+    status = std::move(cached);
+    return true;
+}
+
+// Reads addlib.json and writes the database it names after the user agrees.
+// With installed set, the database is offered only when its release and
+// revision are newer than the installed file's and the user has not declined
+// that file.
 [[nodiscard]] AddressLibraryUpdateStatus OfferAddressLibraryDownload(
     const RuntimeProcessPlatform& platform,
     TargetKind target,
@@ -186,13 +298,114 @@ void LogAddressLibraryRejection(
     const address::ExecutableIdentity& executable,
     std::uintptr_t moduleBase,
     const InstalledFile* installed) noexcept {
+    namespace v3 = address::v3;
     const auto runtimeText = FormatRuntimeVersion(runtime);
-    std::string contents;
-    if (!platform.downloadAddressLibrary(target, runtime, contents)) {
+    v3::Status status;
+    if (!ReadServerStatus(platform, status)) {
         DiagnosticLogFormat(
             "Address Library: no download available for runtime %s (%s)",
             runtimeText.data(),
             TargetKindName(target));
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+    const v3::Build* const build = v3::FindBuild(status, target, runtime, executable);
+    if (build == nullptr) {
+        DiagnosticLogFormat(
+            "Address Library: status %llu has no entry for runtime %s (%s), "
+            "timestamp 0x%08X size 0x%08X",
+            static_cast<unsigned long long>(status.sequence),
+            runtimeText.data(),
+            TargetKindName(target),
+            executable.timeDateStamp,
+            executable.imageSize);
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+
+    // A file that the new status blocks is replaced by any database.
+    if (installed != nullptr) {
+        const auto* const blocked = v3::FindBlockedRevision(
+            *build, installed->release, installed->revision);
+        if (blocked != nullptr) {
+            const auto* const blockMessage =
+                v3::FindMessage(status.messages, blocked->messageId);
+            DiagnosticLogFormat(
+                "Address Library: installed revision %u (xScal %hhu.%hhu.%hhu) is blocked (message %s)",
+                installed->revision,
+                installed->release.major,
+                installed->release.minor,
+                installed->release.patch,
+                blockMessage != nullptr ? blockMessage->id.c_str() : "no message");
+            // The file stays in use until the game is restarted; the next
+            // launch refuses it and shows the reason in the flatline dialog.
+            installed = nullptr;
+        }
+    }
+    if (build->status != v3::BuildStatus::Ok) {
+        static constexpr const char* kNames[] = {"ok", "held", "unavailable", "retired"};
+        DiagnosticLogFormat(
+            "Address Library: runtime %s (%s) is %s, nothing to download",
+            runtimeText.data(),
+            TargetKindName(target),
+            kNames[static_cast<int>(build->status)]);
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+    if (!build->hasDatabase) {
+        DiagnosticLogFormat(
+            "Address Library: status ok for runtime %s (%s) but the entry has no database",
+            runtimeText.data(),
+            TargetKindName(target));
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+    const v3::DatabaseEntry& entry = build->database;
+    if (installed != nullptr) {
+        if (!address::format::IsFileNewer(
+                entry.release, entry.revision, installed->release, installed->revision)) {
+            DiagnosticLogFormat(
+                "Address Library: server has no newer file for runtime %s (%s)",
+                runtimeText.data(),
+                TargetKindName(target));
+            return AddressLibraryUpdateStatus::Unavailable;
+        }
+        if (address::IsUpdateDeclined(target, runtime, entry.release, entry.revision)) {
+            DiagnosticLogFormat(
+                "Address Library: server file %hhu.%hhu.%hhu revision %u was declined earlier",
+                entry.release.major,
+                entry.release.minor,
+                entry.release.patch,
+                entry.revision);
+            return AddressLibraryUpdateStatus::Unavailable;
+        }
+    }
+    if (const auto* const blocked = v3::FindBlockedRevision(
+            *build, entry.release, entry.revision)) {
+        const auto* const blockMessage = v3::FindMessage(status.messages, blocked->messageId);
+        DiagnosticLogFormat(
+            "Address Library: server file %hhu.%hhu.%hhu revision %u is blocked (message %s)",
+            entry.release.major,
+            entry.release.minor,
+            entry.release.patch,
+            entry.revision,
+            blockMessage != nullptr ? blockMessage->id.c_str() : "no message");
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+
+    std::string contents;
+    if (!platform.downloadAddressLibrary(entry.url.c_str(), contents)) {
+        DiagnosticLogFormat(
+            "Address Library: %s could not be downloaded", entry.url.c_str());
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+    plugins::signing::Hash hash{};
+    if (contents.size() != entry.size) {
+        DiagnosticLogFormat(
+            "Address Library: downloaded file has %zu bytes, the status says %u",
+            contents.size(),
+            entry.size);
+        return AddressLibraryUpdateStatus::Unavailable;
+    }
+    if (plugins::signing::HashBytes(contents.data(), contents.size(), hash) < 0 ||
+        hash != entry.sha256) {
+        DiagnosticLog("Address Library: downloaded file SHA-256 does not match the status");
         return AddressLibraryUpdateStatus::Unavailable;
     }
 
@@ -209,24 +422,15 @@ void LogAddressLibraryRejection(
     }
     const auto release = downloaded.ReleaseXScalVersion();
     const auto revision = downloaded.Revision();
-    if (installed != nullptr) {
-        if (!address::format::IsFileNewer(
-                release, revision, installed->release, installed->revision)) {
-            DiagnosticLogFormat(
-                "Address Library: server has no newer file for runtime %s (%s)",
-                runtimeText.data(),
-                TargetKindName(target));
-            return AddressLibraryUpdateStatus::Unavailable;
-        }
-        if (address::IsUpdateDeclined(target, runtime, release, revision)) {
-            DiagnosticLogFormat(
-                "Address Library: server file %hhu.%hhu.%hhu revision %u was declined earlier",
-                release.major,
-                release.minor,
-                release.patch,
-                revision);
-            return AddressLibraryUpdateStatus::Unavailable;
-        }
+    if (address::format::EncodeXScalVersion(release) !=
+            address::format::EncodeXScalVersion(entry.release) ||
+        revision != entry.revision) {
+        DiagnosticLogFormat(
+            "Address Library: downloaded file is %hhu.%hhu.%hhu revision %u, "
+            "the status says %hhu.%hhu.%hhu revision %u",
+            release.major, release.minor, release.patch, revision,
+            entry.release.major, entry.release.minor, entry.release.patch, entry.revision);
+        return AddressLibraryUpdateStatus::Unavailable;
     }
 
     std::array<wchar_t, 160> versions{};
@@ -317,7 +521,7 @@ void ShowRestartNotice(const RuntimeProcessPlatform& platform) noexcept {
 }
 
 // Asks the server for a newer database than the installed one, at most once
-// per 24 hours, and right away after xScal itself was updated. A newly
+// per checkAgainHours of the build entry (24 without one), and right away after xScal itself was updated. A newly
 // installed file is used after the next restart.
 [[nodiscard]] AddressLibraryUpdateStatus UpdateInstalledAddressLibrary(
     const RuntimeProcessPlatform& platform,
@@ -327,13 +531,16 @@ void ShowRestartNotice(const RuntimeProcessPlatform& platform) noexcept {
     std::uintptr_t moduleBase,
     const InstalledFile& installed) noexcept {
     const std::uint64_t now = CurrentFileTime(platform);
-    if (!address::IsUpdateCheckDue(target, runtime, now)) {
+    const std::uint32_t intervalHours =
+        address::v3::CachedCheckHours(target, runtime, executable);
+    if (!address::IsUpdateCheckDue(target, runtime, now, intervalHours)) {
         const auto runtimeText = FormatRuntimeVersion(runtime);
         DiagnosticLogFormat(
             "Address Library: update check skipped for runtime %s (%s), "
-            "last check was less than 24 hours ago",
+            "last check was less than %u hours ago",
             runtimeText.data(),
-            TargetKindName(target));
+            TargetKindName(target),
+            intervalHours);
         return AddressLibraryUpdateStatus::Unavailable;
     }
 
@@ -370,42 +577,127 @@ struct BackgroundJob final {
     InstalledFile installed;
     // False when the file loaded and has every ID.
     bool showError;
+    // The installed file is listed in blockedRevisions. blockedMessage is
+    // set when the entry names a message.
+    bool blocked;
+    bool hasBlockedMessage;
+    address::v3::Message blockedMessage;
 };
 
-// Runs on the background thread: the error boxes, the download offers and
-// the restart notice.
+// The messages of the cached status, which the daily check has just
+// refreshed, that apply to this xScal version now.
+struct StatusMessages final {
+    // For the flatline dialog: the first of the build's messageIds, else the
+    // first of missingMessageIds (also for builds the status does not list).
+    bool hasEvent{};
+    address::v3::Message event;
+    // The first of the build's alwaysMessageIds, or of the status's list for
+    // builds it does not list.
+    bool hasAlways{};
+    address::v3::Message always;
+};
+
+[[nodiscard]] StatusMessages ReadStatusMessages(
+    const RuntimeProcessPlatform& platform,
+    TargetKind target,
+    const config::RuntimeVersion& runtime,
+    const address::ExecutableIdentity& executable) noexcept {
+    StatusMessages found;
+    try {
+        address::v3::Status status;
+        if (!address::v3::LoadCachedStatus(status)) {
+            return found;
+        }
+        const address::format::XScalVersion running{
+            config::kXScalVersion.major, config::kXScalVersion.minor, config::kXScalVersion.patch};
+        const auto now = CurrentFileTime(platform);
+        const auto first = [&](const std::vector<std::string>& ids, address::v3::Message& message) {
+            for (const auto& id : ids) {
+                const auto* const candidate = address::v3::FindMessage(status.messages, id);
+                if (candidate != nullptr && address::v3::IsMessageCurrent(*candidate, running, now)) {
+                    message = *candidate;
+                    return true;
+                }
+            }
+            return false;
+        };
+        const auto* const build = address::v3::FindBuild(status, target, runtime, executable);
+        found.hasEvent = (build != nullptr && first(build->messageIds, found.event)) ||
+            first(status.missingMessageIds, found.event);
+        found.hasAlways = first(build != nullptr ? build->alwaysMessageIds : status.alwaysMessageIds, found.always);
+    } catch (...) {
+        found = {};
+    }
+    return found;
+}
+
+// The update offers, the restart notice and the flatline dialog. Returns
+// true when the flatline dialog was shown; it already carries the Always
+// message then.
+[[nodiscard]] bool RunAddressLibraryJob(BackgroundJob& job) noexcept {
+    const bool fileMissing = job.status == address::LoadStatus::Missing;
+    const bool fileUnusable =
+        fileMissing ||
+        job.status == address::LoadStatus::Invalid ||
+        job.status == address::LoadStatus::BadSignature ||
+        job.status == address::LoadStatus::WrongExecutable;
+    if (job.autoUpdate) {
+        auto updateStatus = AddressLibraryUpdateStatus::Unavailable;
+        if (fileUnusable) {
+            updateStatus = UpdateMissingAddressLibrary(
+                job.platform, job.target, job.runtime, job.executable,
+                job.moduleBase);
+            if (updateStatus == AddressLibraryUpdateStatus::Declined && fileMissing) {
+                return false;
+            }
+        } else if (job.status == address::LoadStatus::Loaded) {
+            updateStatus = UpdateInstalledAddressLibrary(
+                job.platform, job.target, job.runtime, job.executable,
+                job.moduleBase, job.installed);
+        }
+        if (updateStatus == AddressLibraryUpdateStatus::Installed) {
+            return false;
+        }
+    }
+    if (!job.showError) {
+        return false;
+    }
+    // One box: the flatline dialog, with the block reason or the event
+    // message, and the Always message.
+    const StatusMessages messages = ReadStatusMessages(job.platform, job.target, job.runtime, job.executable);
+    ShowAddressLibraryError(
+        job.platform,
+        job.runtime,
+        job.hasBlockedMessage ? &job.blockedMessage : (messages.hasEvent ? &messages.event : nullptr),
+        messages.hasAlways ? &messages.always : nullptr);
+    return true;
+}
+
+// Runs on the background thread: the error boxes, the download offers, the
+// restart notice and the Always message.
 void RunBackgroundJob(void* context) noexcept {
     std::unique_ptr<BackgroundJob> job{static_cast<BackgroundJob*>(context)};
     if (job->versionUnreadable) {
         ShowRuntimeVersionError(job->platform);
         return;
     }
-    const bool fileMissing = job->status == address::LoadStatus::Missing;
-    const bool fileUnusable =
-        fileMissing ||
-        job->status == address::LoadStatus::Invalid ||
-        job->status == address::LoadStatus::BadSignature ||
-        job->status == address::LoadStatus::WrongExecutable;
-    if (job->autoUpdate) {
-        auto updateStatus = AddressLibraryUpdateStatus::Unavailable;
-        if (fileUnusable) {
-            updateStatus = UpdateMissingAddressLibrary(
-                job->platform, job->target, job->runtime, job->executable,
-                job->moduleBase);
-            if (updateStatus == AddressLibraryUpdateStatus::Declined && fileMissing) {
-                return;
-            }
-        } else if (job->status == address::LoadStatus::Loaded) {
-            updateStatus = UpdateInstalledAddressLibrary(
-                job->platform, job->target, job->runtime, job->executable,
-                job->moduleBase, job->installed);
-        }
-        if (updateStatus == AddressLibraryUpdateStatus::Installed) {
-            return;
-        }
+    if (RunAddressLibraryJob(*job)) {
+        return;
     }
-    if (job->showError) {
-        ShowAddressLibraryError(job->platform, job->runtime);
+    // Without the flatline dialog the Always message is a box of its own,
+    // once per launch, after the daily check has refreshed the status.
+    const StatusMessages messages = ReadStatusMessages(job->platform, job->target, job->runtime, job->executable);
+    if (!messages.hasAlways) {
+        return;
+    }
+    try {
+        std::wstring text;
+        UINT icon{};
+        if (address::v3::BuildMessageText(messages.always, {}, text, icon)) {
+            job->platform.messageBox(nullptr, text.c_str(), L"xScal", MB_OK | icon);
+        }
+    } catch (...) {
+        DiagnosticLog("Address Library: Always message could not be shown (out of memory)");
     }
 }
 
@@ -451,7 +743,7 @@ RuntimeProcessPlatform SystemRuntimeProcessPlatform() noexcept {
     return {
         &::GetModuleFileNameW, &::GetModuleHandleW,
         &ReadSystemRuntimeVersion, &::MessageBoxW,
-        &address::DownloadAddressLibrary,
+        &address::DownloadAddressLibraryFile,
         &address::ReadExecutableIdentity,
         &::GetSystemTimeAsFileTime,
         &RunOnNewThread,
@@ -602,10 +894,41 @@ VtableHookStatus InitializeCurrentProcess(
         return VtableHookStatus::InvalidArgument;
     }
     plugins::SetAddressLibrary(nullptr);
-    const auto addressStatus = activeAddressLibrary.Load(
+    address::v3::ApplyCachedRevocations();
+    auto addressStatus = activeAddressLibrary.Load(
         target->kind, found, executable, base);
     job->runtime = found;
     job->executable = executable;
+    if (addressStatus == address::LoadStatus::Loaded) {
+        // A blocked revision is treated like a missing file.
+        address::v3::Status cachedStatus;
+        const address::v3::Build* build = nullptr;
+        if (address::v3::LoadCachedStatus(cachedStatus)) {
+            build = address::v3::FindBuild(cachedStatus, target->kind, found, executable);
+        }
+        const auto release = activeAddressLibrary.ReleaseXScalVersion();
+        const auto revision = activeAddressLibrary.Revision();
+        const auto* const blocked = build != nullptr
+            ? address::v3::FindBlockedRevision(*build, release, revision)
+            : nullptr;
+        if (blocked != nullptr) {
+            const auto* const blockMessage =
+                address::v3::FindMessage(cachedStatus.messages, blocked->messageId);
+            DiagnosticLogFormat(
+                "xScal Address Library version-%hu-%hu-%hu-%hu-%s.bin revision %u "
+                "(xScal %hhu.%hhu.%hhu) is blocked (message %s)",
+                found.major, found.minor, found.build, found.revision,
+                TargetKindName(target->kind), revision,
+                release.major, release.minor, release.patch,
+                blockMessage != nullptr ? blockMessage->id.c_str() : "no message");
+            job->blocked = true;
+            if (blockMessage != nullptr) {
+                job->blockedMessage = *blockMessage;
+                job->hasBlockedMessage = true;
+            }
+            addressStatus = address::LoadStatus::Missing;
+        }
+    }
     job->status = addressStatus;
     if (addressStatus == address::LoadStatus::Loaded) {
         job->installed = {
@@ -622,7 +945,7 @@ VtableHookStatus InitializeCurrentProcess(
         }
         VtableHookStatus failure = VtableHookStatus::AddressLibraryInvalid;
         if (addressStatus == address::LoadStatus::Missing) {
-            statusText = "file not found";
+            statusText = job->blocked ? "revision blocked" : "file not found";
             failure = VtableHookStatus::AddressLibraryMissing;
         } else if (addressStatus == address::LoadStatus::BadSignature) {
             statusText = "signature check failed";

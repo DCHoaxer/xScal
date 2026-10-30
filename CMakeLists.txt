@@ -51,6 +51,7 @@ set(XSCAL_CORE_SOURCES
     "${XSCAL_YYJSON_DIR}/yyjson.c"
     ${XSCAL_LIBDEFLATE_SOURCES}
     src/address/address_library.cpp
+    src/address/address_library_v3.cpp
     src/archive/archive_stream_hook.cpp
     src/common/json.cpp
     src/api/mod_storage.cpp
