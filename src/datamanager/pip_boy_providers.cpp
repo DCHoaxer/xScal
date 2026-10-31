@@ -27,7 +27,8 @@ bool PipBoyStatusSlice::Resolve(
         virtualQuery,
         moduleBase,
         profile.dataManager.pipBoyInventory,
-        runtime.inventory);
+        runtime.inventory,
+        profile.dataManager.itemClass);
     return true;
 }
 

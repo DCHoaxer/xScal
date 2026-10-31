@@ -1305,8 +1305,39 @@ int32_t __cdecl AddInvokeFilter(
     return 1;
 }
 
-constexpr XScalScaleformMovieV2 kInterface{
-    sizeof(XScalScaleformMovieV2),
+// The other functions read through the original GetVariable, which skips
+// xScal's router. This one looks up objectPath.__SFCodeObj.call through the
+// hooked GetVariable instead: the router attaches call() to that code object
+// for a .__SFCodeObj.call path, the same as when game code looks it up.
+int32_t __cdecl AttachCodeObject(
+    XScalMovie* movie,
+    const char* objectPath) noexcept {
+    constexpr std::string_view kRootPrefix{"root1."};
+    constexpr std::string_view kCallSuffix{".__SFCodeObj.call"};
+    const auto* context = ContextOf(movie);
+    if (context == nullptr || objectPath == nullptr) {
+        return 0;
+    }
+    const std::string_view object{objectPath};
+    char path[kNameCapacity + kCallSuffix.size() + 1]{};
+    if (!object.starts_with(kRootPrefix) || object.size() >= kNameCapacity) {
+        return 0;
+    }
+    std::memcpy(path, object.data(), object.size());
+    std::memcpy(path + object.size(), kCallSuffix.data(), kCallSuffix.size());
+
+    ScaleformValue call{};
+    const bool found =
+        HookedMovieRootGetVariable(context->movieRoot, &call, path) &&
+        IsObjectLikeScaleformValue(call);
+    ReleaseValue(*context, call);
+    return found ? 1 : 0;
+}
+
+// Plugins asking for version 2 get this table through a V2 pointer; the
+// structures share their layout up to moveValue.
+constexpr XScalScaleformMovieV3 kInterface{
+    sizeof(XScalScaleformMovieV3),
     XSCAL_SCALEFORM_MOVIE_API_VERSION,
     &AddLookupHandler,
     &RegisterFunction,
@@ -1336,12 +1367,13 @@ constexpr XScalScaleformMovieV2 kInterface{
     &Post,
     &AddInvokeFilter,
     &MoveValue,
+    &AttachCodeObject,
 };
 
 }  // namespace
 
 const XScalScaleformMovieV2* Interface() noexcept {
-    return &kInterface;
+    return reinterpret_cast<const XScalScaleformMovieV2*>(&kInterface);
 }
 
 const XScalScaleformMovieV1* InterfaceV1() noexcept {

@@ -17,8 +17,9 @@ struct XScalMovie final {
 
 namespace sf::movieapi {
 
-// Process-lifetime table returned for XSCAL_SCALEFORM_MOVIE_INTERFACE. Version
-// 1 callers read its XScalScaleformMovieV1 prefix.
+// Process-lifetime table returned for XSCAL_SCALEFORM_MOVIE_INTERFACE. It is
+// an XScalScaleformMovieV3 (version 3); version 1 and 2 callers read its
+// XScalScaleformMovieV1 or XScalScaleformMovieV2 prefix.
 [[nodiscard]] const XScalScaleformMovieV2* Interface() noexcept;
 // The same functions as Interface(), with version 1 and the version 1 size.
 // Plugins built with SDK 5 may compare the version for equality.

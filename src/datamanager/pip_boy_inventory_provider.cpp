@@ -30,7 +30,8 @@ bool PipBoyInventoryProvider::Install(
             virtualQuery_,
             moduleBase,
             profile.dataManager.pipBoyInventory,
-            resolvedRuntime)) {
+            resolvedRuntime,
+            profile.dataManager.itemClass)) {
         return false;
     }
 
