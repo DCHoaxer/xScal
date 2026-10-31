@@ -1041,6 +1041,47 @@ void ReadPipBoyInventoryProfile(
     ReadProfileFields(addresses, kPipBoyInventoryFields, inventory);
 }
 
+constexpr std::array kItemClassFields{
+    Field(
+        XSCAL_CONSTANT_ARMOR_BIPED_SLOTS_OFFSET,
+        offsetof(config::NativeItemClassProfile, armorBipedSlotsOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_WEAPON_KEYWORD_FORM_OFFSET,
+        offsetof(config::NativeItemClassProfile, weaponKeywordFormOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_ARMOR_KEYWORD_FORM_OFFSET,
+        offsetof(config::NativeItemClassProfile, armorKeywordFormOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_KEYWORD_FORM_KEYWORDS_BEGIN_OFFSET,
+        offsetof(config::NativeItemClassProfile, keywordsBeginOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_KEYWORD_FORM_KEYWORDS_END_OFFSET,
+        offsetof(config::NativeItemClassProfile, keywordsEndOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_KEYWORD_FORM_LOCK_OFFSET,
+        offsetof(config::NativeItemClassProfile, keywordLockOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_KEYWORD_FORM_PARENT_OFFSET,
+        offsetof(config::NativeItemClassProfile, keywordParentOffset),
+        FieldKind::RequiredConstant),
+    Field(
+        XSCAL_CONSTANT_FORM_ID_OFFSET,
+        offsetof(config::NativeItemClassProfile, formIdOffset),
+        FieldKind::RequiredConstant),
+};
+
+void ReadItemClassProfile(
+    const XScalAddressLibraryV1& addresses,
+    config::NativeItemClassProfile& itemClass) noexcept {
+    ReadProfileFields(addresses, kItemClassFields, itemClass);
+}
+
 }
 
 const TargetDefinition* SelectTarget(
@@ -1105,6 +1146,7 @@ bool ReadTargetProfile(
     ReadPipBoyStatusProfile(addresses, result.dataManager.pipBoyStatus);
     ReadPipBoyQuestsProfile(addresses, result.dataManager.pipBoyQuests);
     ReadPipBoyInventoryProfile(addresses, result.dataManager.pipBoyInventory);
+    ReadItemClassProfile(addresses, result.dataManager.itemClass);
     ReadPipBoyCollectionsProfile(addresses, result.dataManager.pipBoyCollections);
     ReadArchiveStreamProfile(addresses, result.archiveStream);
 

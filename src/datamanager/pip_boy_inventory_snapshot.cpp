@@ -389,6 +389,7 @@ void ReleaseObjectInstance(ObjectInstance& instance) noexcept {
     if (!ReadField(form, runtime.layout.weaponTypeOffset, weaponType)) {
         return false;
     }
+    entry.weaponType = weaponType;
     entry.hasWeaponStats = weaponType != 10 && weaponType != 11;
     ObjectInstance instance;
     if (!CallResolveObjectInstance(
@@ -401,6 +402,82 @@ void ReleaseObjectInstance(ObjectInstance& instance) noexcept {
     return read &&
         std::isfinite(entry.rateOfFire) && std::isfinite(entry.range) &&
         std::isfinite(entry.accuracy) && std::isfinite(entry.apCost);
+}
+
+// Stop a parent chain or keyword array that points into unrelated memory.
+constexpr int kMaximumKeywordParentDepth = 4;
+constexpr std::size_t kMaximumKeywords = 512;
+
+// Appends the keyword form IDs of a BGSKeywordForm and its parents: each
+// component's read lock, its BGSKeyword* range, then the parent component.
+// A lock that a writer holds ends the walk with the keywords read so far,
+// because waiting could stall the frame.
+[[nodiscard]] bool ReadKeywordIds(
+    const ResolvedPipBoyInventoryRuntime& runtime,
+    std::uintptr_t component,
+    std::vector<std::uint32_t>& keywords) {
+    const auto& layout = runtime.itemClass;
+    for (int depth = 0; component != 0 && depth <= kMaximumKeywordParentDepth; ++depth) {
+        std::uintptr_t lock{};
+        bool acquired{};
+        if (!platform::TryAddAddress(component, layout.keywordLockOffset, lock) ||
+            !TryAcquireGameReadLock(runtime.tryAcquireReadLock, lock, acquired)) {
+            return false;
+        }
+        if (!acquired) {
+            return true;
+        }
+        const GameReadLockGuard readLock{runtime.releaseReadLock, lock};
+        std::uintptr_t begin{};
+        std::uintptr_t end{};
+        std::uintptr_t parent{};
+        if (!ReadField(component, layout.keywordsBeginOffset, begin) ||
+            !ReadField(component, layout.keywordsEndOffset, end) ||
+            !ReadField(component, layout.keywordParentOffset, parent) ||
+            end < begin || (end - begin) % sizeof(std::uintptr_t) != 0 ||
+            (end - begin) / sizeof(std::uintptr_t) > kMaximumKeywords) {
+            return false;
+        }
+        for (auto slot = begin; slot != end && keywords.size() < kMaximumKeywords;
+             slot += sizeof(std::uintptr_t)) {
+            std::uintptr_t keyword{};
+            std::uint32_t formId{};
+            if (!ReadField(slot, 0, keyword)) {
+                return false;
+            }
+            if (keyword != 0 && ReadField(keyword, layout.formIdOffset, formId)) {
+                keywords.push_back(formId);
+            }
+        }
+        component = parent;
+    }
+    return true;
+}
+
+// Weapon and armor items get their base form's keywords; armor also gets its
+// biped slot mask. Both come from the base form, so modifications do not
+// change them.
+[[nodiscard]] bool ReadItemClass(
+    const ResolvedPipBoyInventoryRuntime& runtime,
+    std::uintptr_t form,
+    PipBoyInventoryItem& entry) {
+    if (!runtime.hasItemClass || (!entry.weapon && !entry.armor)) {
+        return true;
+    }
+    const auto& layout = runtime.itemClass;
+    if (entry.armor && !ReadField(form, layout.armorBipedSlotsOffset, entry.armorSlots)) {
+        return false;
+    }
+    std::uintptr_t component{};
+    if (!platform::TryAddAddress(
+            form,
+            entry.weapon ? layout.weaponKeywordFormOffset : layout.armorKeywordFormOffset,
+            component) ||
+        !ReadKeywordIds(runtime, component, entry.keywords)) {
+        return false;
+    }
+    entry.hasClass = true;
+    return true;
 }
 
 using IsFormTaggedForSearch = bool(__fastcall*)(void* tagList, void* form);
@@ -684,6 +761,19 @@ using IsFormTaggedForSearch = bool(__fastcall*)(void* tagList, void* form);
                 return false;
             }
         }
+        // The class fields are optional: an item whose keywords cannot be
+        // read is listed without them.
+        bool classRead{};
+        try {
+            classRead = ReadItemClass(runtime, form, entry);
+        } catch (...) {
+            classRead = false;
+        }
+        if (!classRead) {
+            entry.hasClass = false;
+            entry.armorSlots = 0;
+            entry.keywords.clear();
+        }
         entry.favorite = favoriteSlot != kNotFavorite;
         items.push_back(std::move(entry));
     }
@@ -748,7 +838,8 @@ using IsFormTaggedForSearch = bool(__fastcall*)(void* tagList, void* form);
             return false;
         }
         json += R"(,"apCost":)";
-        if (!json::AppendFloat(item.apCost, json)) {
+        if (!json::AppendFloat(item.apCost, json) ||
+            !appendInteger(R"(,"weaponType":)", item.weaponType)) {
             return false;
         }
     }
@@ -758,6 +849,23 @@ using IsFormTaggedForSearch = bool(__fastcall*)(void* tagList, void* form);
                 item.resistances, kMaximumInventoryJsonBytes, json)) {
             return false;
         }
+        if (item.hasClass &&
+            !appendInteger(R"(,"armorSlots":)", item.armorSlots)) {
+            return false;
+        }
+    }
+    if (item.hasClass) {
+        json += R"(,"keywords":[)";
+        for (std::size_t index = 0; index < item.keywords.size(); ++index) {
+            if (index != 0) {
+                json.push_back(',');
+            }
+            if (!json::AppendInteger(
+                    item.keywords[index], json, kMaximumInventoryJsonBytes)) {
+                return false;
+            }
+        }
+        json.push_back(']');
     }
     json.push_back('}');
     return true;
@@ -908,7 +1016,8 @@ bool ResolvePipBoyInventoryRuntime(
     platform::VirtualQueryFn virtualQuery,
     std::uintptr_t moduleBase,
     const config::NativePipBoyInventoryProfile& inventory,
-    ResolvedPipBoyInventoryRuntime& runtime) noexcept {
+    ResolvedPipBoyInventoryRuntime& runtime,
+    const config::NativeItemClassProfile& itemClass) noexcept {
     runtime = {};
     if (virtualQuery == nullptr || moduleBase == 0 ||
         inventory.inventoryListOffset == 0 ||
@@ -941,6 +1050,17 @@ bool ResolvePipBoyInventoryRuntime(
             &candidate,
             kPipBoyInventoryRuntimeBindings)) {
         return false;
+    }
+    candidate.hasItemClass = itemClass.armorBipedSlotsOffset != 0 &&
+        itemClass.weaponKeywordFormOffset != 0 &&
+        itemClass.armorKeywordFormOffset != 0 &&
+        itemClass.keywordsBeginOffset != 0 &&
+        itemClass.keywordsEndOffset != 0 &&
+        itemClass.keywordLockOffset != 0 &&
+        itemClass.keywordParentOffset != 0 &&
+        itemClass.formIdOffset != 0;
+    if (candidate.hasItemClass) {
+        candidate.itemClass = itemClass;
     }
 
     runtime = candidate;

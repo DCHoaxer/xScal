@@ -46,6 +46,8 @@ struct ResolvedPipBoyInventoryRuntime final {
     std::uintptr_t canFavoriteForm{};
     std::uintptr_t isFormTaggedForSearch{};
     std::uintptr_t searchTagListGlobal{};
+    config::NativeItemClassProfile itemClass{};
+    bool hasItemClass{};
 };
 
 // One damage row the game builds for a weapon. type is the game's damage
@@ -98,6 +100,16 @@ struct PipBoyInventoryItem final {
     std::vector<PipBoyDamageRow> damage;
     // Non-zero resistance rows of an armor item.
     std::vector<PipBoyDamageRow> resistances;
+    // Read only when the runtime has an item class profile.
+    bool hasClass{};
+    // Weapon type byte: 0xFF and 0 to 6 melee, 7 to 9 ranged, 10 grenade or
+    // thrown, 11 mine.
+    std::uint8_t weaponType{};
+    // Armor biped slot mask of the base form; bit n is slot n+30.
+    std::uint32_t armorSlots{};
+    // Form IDs of the base form's keywords, its parent keyword forms
+    // included. Keywords that modifications add are not listed.
+    std::vector<std::uint32_t> keywords;
 };
 
 enum class PipBoyInventoryCaptureResult {
@@ -110,11 +122,14 @@ enum class PipBoyInventoryCaptureResult {
     Unchanged,
 };
 
+// An itemClass profile with a zero value leaves weaponType, armorSlots and
+// keywords out of every item; the rest is read as before.
 [[nodiscard]] bool ResolvePipBoyInventoryRuntime(
     platform::VirtualQueryFn virtualQuery,
     std::uintptr_t moduleBase,
     const config::NativePipBoyInventoryProfile& inventory,
-    ResolvedPipBoyInventoryRuntime& runtime) noexcept;
+    ResolvedPipBoyInventoryRuntime& runtime,
+    const config::NativeItemClassProfile& itemClass = {}) noexcept;
 
 // fingerprint receives a hash of the item list as stored: each item's bytes
 // and each stack's pointer and count. When unchangedFingerprint matches it,

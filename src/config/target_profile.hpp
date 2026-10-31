@@ -339,6 +339,23 @@ struct NativePipBoyInventoryProfile final {
         const NativePipBoyInventoryProfile&) const noexcept = default;
 };
 
+// Optional data for the weaponType, armorSlots and keywords fields of the
+// Pip-Boy inventory. A database without these values leaves the profile zero;
+// the inventory is then read without those fields.
+struct NativeItemClassProfile final {
+    std::size_t armorBipedSlotsOffset;
+    std::size_t weaponKeywordFormOffset;
+    std::size_t armorKeywordFormOffset;
+    std::size_t keywordsBeginOffset;
+    std::size_t keywordsEndOffset;
+    std::size_t keywordLockOffset;
+    std::size_t keywordParentOffset;
+    std::size_t formIdOffset;
+
+    [[nodiscard]] constexpr bool operator==(
+        const NativeItemClassProfile&) const noexcept = default;
+};
+
 // Exact-build data needed to read the collectibles the Pip-Boy lists.
 struct NativePipBoyCollectionsProfile final {
     std::uintptr_t localPlayerGlobal;
@@ -379,6 +396,7 @@ struct DataManagerProfile final {
     NativePipBoyStatusProfile pipBoyStatus;
     NativePipBoyQuestsProfile pipBoyQuests;
     NativePipBoyInventoryProfile pipBoyInventory;
+    NativeItemClassProfile itemClass;
     NativePipBoyCollectionsProfile pipBoyCollections;
 
     [[nodiscard]] constexpr bool operator==(
