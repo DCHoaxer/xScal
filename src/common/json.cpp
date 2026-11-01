@@ -250,6 +250,15 @@ bool Value::ReadString(std::string_view& value) const noexcept {
     return true;
 }
 
+bool Value::ReadNumber(double& value) const noexcept {
+    value = 0.0;
+    if (value_ == nullptr || !yyjson_is_num(value_)) {
+        return false;
+    }
+    value = yyjson_get_num(value_);
+    return true;
+}
+
 std::size_t Value::ArraySize() const noexcept {
     return value_ != nullptr && yyjson_is_arr(value_)
         ? yyjson_arr_size(value_)
@@ -262,6 +271,10 @@ Value Value::ArrayItem(std::size_t index) const noexcept {
         : nullptr};
 }
 
+ArrayIterator Value::Items() const noexcept {
+    return ArrayIterator{value_};
+}
+
 MemberIterator Value::Members() const noexcept {
     return MemberIterator{value_};
 }
@@ -271,6 +284,22 @@ Value Value::FindMember(std::string_view name) const noexcept {
         return {};
     }
     return Value{yyjson_obj_getn(value_, name.data(), name.size())};
+}
+
+ArrayIterator::ArrayIterator(yyjson_val* array) noexcept {
+    if (array != nullptr && yyjson_is_arr(array)) {
+        iterator_ = yyjson_arr_iter_with(array);
+    }
+}
+
+bool ArrayIterator::Next(Value& value) noexcept {
+    value = {};
+    yyjson_val* const item = yyjson_arr_iter_next(&iterator_);
+    if (item == nullptr) {
+        return false;
+    }
+    value = Value{item};
+    return true;
 }
 
 MemberIterator::MemberIterator(yyjson_val* object) noexcept {

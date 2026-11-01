@@ -56,6 +56,7 @@ set(XSCAL_CORE_SOURCES
     src/common/json.cpp
     src/api/mod_storage.cpp
     src/api/file_command_service.cpp
+    src/api/game_objects.cpp
     src/api/internal/enemy_meter_data.cpp
     src/api/internal/enemy_meter_native.cpp
     src/api/internal/stealth_meter_data.cpp

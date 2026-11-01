@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scaleform/abi.hpp"
+#include "scaleform/value.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +19,8 @@ enum class ScaleformResultKind {
     UInt32,
     Number,
     String,
+    // An owned Scaleform value, such as an object built for the caller.
+    OwnedValue,
 };
 
 struct ScaleformResult final {
@@ -27,6 +30,35 @@ struct ScaleformResult final {
     std::uint32_t uint32Value{};
     double numberValue{};
     std::string stringValue;
+    ScaleformValue ownedValue{};
+    // Releases ownedValue when the result is destroyed without being committed.
+    ScaleformReleaseValueRoutine releaseOwnedValue{};
+
+    ScaleformResult() noexcept = default;
+    ScaleformResult(const ScaleformResult&) = delete;
+    ScaleformResult& operator=(const ScaleformResult&) = delete;
+
+    // Supports result = {} between calls. Releases the owned value this result
+    // still holds and takes over the other result's.
+    ScaleformResult& operator=(ScaleformResult&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        ReleaseOwnedValue();
+        kind = other.kind;
+        booleanValue = other.booleanValue;
+        int32Value = other.int32Value;
+        uint32Value = other.uint32Value;
+        numberValue = other.numberValue;
+        stringValue.swap(other.stringValue);
+        if (other.kind == ScaleformResultKind::OwnedValue) {
+            SetOwnedValue(other.ownedValue, other.releaseOwnedValue);
+            other.ForgetOwnedValue();
+        }
+        return *this;
+    }
+
+    ~ScaleformResult() { ReleaseOwnedValue(); }
 
     void SetBoolean(bool value) noexcept {
         booleanValue = value;
@@ -59,6 +91,37 @@ struct ScaleformResult final {
         } catch (...) {
             return false;
         }
+    }
+
+    // Takes over value, an owned value of the movie whose release routine is
+    // passed. value is left empty. Owned values are list nodes, so the copy is
+    // relinked at its new address.
+    void SetOwnedValue(
+        ScaleformValue& value,
+        ScaleformReleaseValueRoutine release) noexcept {
+        std::memcpy(&ownedValue, &value, sizeof(value));
+        RelinkMovedScaleformValue(ownedValue);
+        value = {};
+        releaseOwnedValue = release;
+        kind = ScaleformResultKind::OwnedValue;
+    }
+
+    // Called after ownedValue was moved into the game's result value.
+    void ForgetOwnedValue() noexcept {
+        ownedValue = {};
+        releaseOwnedValue = nullptr;
+        kind = ScaleformResultKind::Undefined;
+    }
+
+private:
+    void ReleaseOwnedValue() noexcept {
+        if (kind != ScaleformResultKind::OwnedValue) {
+            return;
+        }
+        MovieRootContext context{};
+        context.api.releaseValue = releaseOwnedValue;
+        ReleaseValue(context, ownedValue);
+        ForgetOwnedValue();
     }
 };
 
@@ -123,9 +186,10 @@ void ClearNativeCallbackRouter(
 
 // Encodes one callback result into the GFx return value. Direct
 // native methods reuse this path without going through __SFCodeObj.call.
+// An OwnedValue result is moved into the game's value and left Undefined.
 [[nodiscard]] bool CommitScaleformResult(
     const FunctionParams& params,
-    const ScaleformResult& result) noexcept;
+    ScaleformResult& result) noexcept;
 
 // Writes a string value into a native call's result. The text is copied into a
 // per-thread buffer that stays valid until the next string result on this
