@@ -62,6 +62,9 @@ struct Build final {
     std::uint32_t checkAgainHours{kDefaultCheckHours};
     bool hasDatabase{};
     DatabaseEntry database;
+    // One entry per xScal release, from "databases"; empty when the status
+    // has no such list (then only "database" applies).
+    std::vector<DatabaseEntry> databases;
     std::vector<BlockedRevision> blockedRevisions;
     std::vector<std::string> messageIds;
     // "Always" messages for this build, most specific first: the first that
@@ -168,6 +171,12 @@ enum class PartCheck {
     const Build& build,
     format::XScalVersion release,
     std::uint32_t revision) noexcept;
+// The database entry for the running xScal: among "databases" the entry with
+// the highest (release, revision) whose minimum is not newer than running.
+// Falls back to "database" when the list is empty. Null when none applies.
+[[nodiscard]] const DatabaseEntry* FindDatabaseFor(
+    const Build& build,
+    format::XScalVersion running) noexcept;
 [[nodiscard]] const Message* FindMessage(
     const std::vector<Message>& messages,
     std::string_view id) noexcept;
