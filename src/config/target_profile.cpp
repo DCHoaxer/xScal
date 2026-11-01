@@ -606,6 +606,10 @@ constexpr std::array kPipBoyStatusFields{
         offsetof(config::NativePipBoyStatusProfile, isActorGhoulRace),
         FieldKind::Rva),
     Field(
+        XSCAL_ADDRESS_IS_PIP_BOY_LIGHT_ON,
+        offsetof(config::NativePipBoyStatusProfile, isPipBoyLightOn),
+        FieldKind::Rva),
+    Field(
         XSCAL_ADDRESS_CALENDAR_SINGLETON_GLOBAL,
         offsetof(config::NativePipBoyStatusProfile, gameCalendarGlobal),
         FieldKind::Rva),
