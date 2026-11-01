@@ -58,6 +58,8 @@ using GetActorCarryWeightValues = void(__fastcall*)(
     float* absoluteWeightLimit);
 using GetPlayerCapsCount = std::int32_t(__fastcall*)(void* player);
 using IsActorGhoulRace = bool(__fastcall*)(void* actor);
+// Returns whether the player's Pip-Boy light is on. Takes no locks.
+using IsPipBoyLightOn = bool(__fastcall*)(void* player);
 // Calendar getters fall back to built-in defaults when a global is missing.
 
 struct CarryWeightValues final {
@@ -124,6 +126,20 @@ struct CarryWeightValues final {
             reinterpret_cast<void*>(player));
     } __except (platform::MemoryAccessExceptionFilter(GetExceptionCode())) {
         ghoul = false;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool CallIsPipBoyLightOn(
+    std::uintptr_t function,
+    std::uintptr_t player,
+    bool& lightOn) noexcept {
+    __try {
+        lightOn = reinterpret_cast<IsPipBoyLightOn>(function)(
+            reinterpret_cast<void*>(player));
+    } __except (platform::MemoryAccessExceptionFilter(GetExceptionCode())) {
+        lightOn = false;
         return false;
     }
     return true;
@@ -349,6 +365,10 @@ constexpr std::array kPipBoyStatusRuntimeBindings{
         offsetof(ResolvedPipBoyStatusRuntime, isActorGhoulRace),
         platform::AddressCheck::Executable),
     platform::Bind(
+        offsetof(config::NativePipBoyStatusProfile, isPipBoyLightOn),
+        offsetof(ResolvedPipBoyStatusRuntime, isPipBoyLightOn),
+        platform::AddressCheck::Executable),
+    platform::Bind(
         offsetof(config::NativePipBoyStatusProfile, gameCalendarGlobal),
         offsetof(ResolvedPipBoyStatusRuntime, gameCalendarGlobal),
         platform::AddressCheck::Readable),
@@ -484,6 +504,8 @@ bool ReadPipBoyStatus(
             runtime.getPlayerCapsCount, player, result.caps) ||
         !ReadLimbsAndResistances(runtime, owner, result) ||
         !CallIsActorGhoulRace(runtime.isActorGhoulRace, player, result.ghoul) ||
+        !CallIsPipBoyLightOn(
+            runtime.isPipBoyLightOn, player, result.pipBoyLightOn) ||
         !ReadGameDate(runtime, result.hasDate, result.date)) {
         return false;
     }
@@ -572,6 +594,7 @@ bool BuildPipBoyStatusJson(
             }
             appendBool(R"(,"irradiated":)", status.irradiated);
             appendBool(R"(,"ghoul":)", status.ghoul);
+            appendBool(R"(,"pipBoyLightOn":)", status.pipBoyLightOn);
         }
         constexpr std::array<std::string_view, 6> kResistKeys{
             R"(},"resist":{"damage":)", R"(,"poison":)", R"(,"fire":)",

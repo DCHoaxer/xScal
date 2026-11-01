@@ -19,6 +19,7 @@ using plugins::signing::Hash;
 constexpr std::size_t kMaximumBuilds = 256;
 constexpr std::size_t kMaximumMessages = 256;
 constexpr std::size_t kMaximumListEntries = 4096;
+constexpr std::size_t kMaximumDatabases = 64;
 constexpr std::size_t kMaximumText = 4000;
 constexpr std::size_t kMaximumUrl = 500;
 constexpr std::size_t kMaximumReason = 500;
@@ -519,7 +520,21 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
         return false;
     }
 
+    // 0.4.33 clients ignore this list and read "database" above.
     json::Value list;
+    if (object.FindMember("databases")) {
+        if (!ReadList(object, "databases", "builds[].databases", kMaximumDatabases, list, detail)) return false;
+        for (std::size_t index = 0; index < list.ArraySize(); ++index) {
+            const json::Value item = list.ArrayItem(index);
+            DatabaseEntry entry;
+            if (item.GetType() != json::Type::Object) {
+                detail = "builds[].databases[]";
+                return false;
+            }
+            if (!ParseDatabase(item, entry, detail)) return false;
+            build.databases.push_back(std::move(entry));
+        }
+    }
     if (!ReadList(object, "blockedRevisions", "builds[].blockedRevisions", kMaximumListEntries, list, detail)) return false;
     for (std::size_t index = 0; index < list.ArraySize(); ++index) {
         const json::Value item = list.ArrayItem(index);
@@ -1015,6 +1030,29 @@ const BlockedRevision* FindBlockedRevision(
         }
     }
     return nullptr;
+}
+
+const DatabaseEntry* FindDatabaseFor(
+    const Build& build,
+    format::XScalVersion running) noexcept {
+    if (build.databases.empty()) {
+        return build.hasDatabase ? &build.database : nullptr;
+    }
+    const DatabaseEntry* best = nullptr;
+    for (const DatabaseEntry& entry : build.databases) {
+        if (format::IsVersionNewer(entry.minimum, running)) {
+            continue;
+        }
+        if (best == nullptr) {
+            best = &entry;
+            continue;
+        }
+        const int byRelease = CompareVersion(entry.release, best->release);
+        if (byRelease > 0 || (byRelease == 0 && entry.revision > best->revision)) {
+            best = &entry;
+        }
+    }
+    return best;
 }
 
 const Message* FindMessage(

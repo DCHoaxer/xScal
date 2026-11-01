@@ -349,14 +349,19 @@ void LogAddressLibraryRejection(
             kNames[static_cast<int>(build->status)]);
         return AddressLibraryUpdateStatus::Unavailable;
     }
-    if (!build->hasDatabase) {
+    constexpr address::format::XScalVersion runningXScal{
+        config::kXScalVersion.major,
+        config::kXScalVersion.minor,
+        config::kXScalVersion.patch};
+    const v3::DatabaseEntry* selected = v3::FindDatabaseFor(*build, runningXScal);
+    if (selected == nullptr) {
         DiagnosticLogFormat(
-            "Address Library: status ok for runtime %s (%s) but the entry has no database",
+            "Address Library: status ok for runtime %s (%s) but the entry has no database for this xScal version",
             runtimeText.data(),
             TargetKindName(target));
         return AddressLibraryUpdateStatus::Unavailable;
     }
-    const v3::DatabaseEntry& entry = build->database;
+    const v3::DatabaseEntry& entry = *selected;
     if (installed != nullptr) {
         if (!address::format::IsFileNewer(
                 entry.release, entry.revision, installed->release, installed->revision)) {

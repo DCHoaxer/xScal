@@ -1,6 +1,7 @@
 #include "hook/movie_root_hook.hpp"
 
 #include "api/scaleform_callbacks.hpp"
+#include "api/game_objects.hpp"
 #include "api/mod_storage.hpp"
 #include "api/scaleform_movie_interface.hpp"
 #include "hook/movie_root_router.hpp"
@@ -169,6 +170,7 @@ VtableHookStatus MovieRootHookController::Install(
             reinterpret_cast<MovieRootDestroy>(
                 reinterpret_cast<void*>(destroyHook_.Original())),
             std::memory_order_release);
+        SetGameObjectCacheAvailable(true);
     }
     if (destroyStatus != VtableHookStatus::Installed) {
         DiagnosticLogFormat(
@@ -222,6 +224,7 @@ VtableHookStatus MovieRootHookController::Restore() noexcept {
         (void)advanceHook_.Restore();
     }
     if (destroyHook_.IsActive()) {
+        SetGameObjectCacheAvailable(false);
         (void)destroyHook_.Restore();
     }
     const auto status = vtableHook_.Restore();
@@ -295,6 +298,7 @@ void* __fastcall HookedMovieRootDestroy(
     }
     movieapi::ReleaseMovie(movieRoot);
     movieapi::ForgetMovie(movieRoot);
+    ReleaseGameObjects(movieRoot);
     return original(movieRoot, flags);
 }
 

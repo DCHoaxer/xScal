@@ -1,6 +1,7 @@
 #include "api/scaleform_callbacks.hpp"
 
 #include "api/file_command_service.hpp"
+#include "api/game_objects.hpp"
 #include "api/internal/enemy_meter_data.hpp"
 #include "api/internal/stealth_meter_data.hpp"
 #include "chat/fcm_log.hpp"
@@ -382,24 +383,34 @@ using StealthMeterRequest =
 
 // Writes a Game.* provider result: the JSON, or the status payload the
 // request returned.
+// The JSON a Game.* call returns for status: the provider's payload when it
+// was delivered, otherwise the matching status payload.
+[[nodiscard]] std::string_view SelectGameProviderPayload(
+    datamanager::GameProviderRequestStatus status,
+    std::string_view pendingPayload,
+    std::string_view payload) noexcept {
+    switch (status) {
+        case datamanager::GameProviderRequestStatus::Delivered:
+            return payload;
+        case datamanager::GameProviderRequestStatus::Inactive:
+            return kInactiveProviderPayload;
+        case datamanager::GameProviderRequestStatus::SnapshotUnavailable:
+            return pendingPayload;
+        default:
+            return kInvalidRequestPayload;
+    }
+}
+
 [[nodiscard]] bool SetGameProviderResult(
     const ScaleformCall& call,
     std::string_view pendingPayload,
     datamanager::GameProviderRequestStatus status,
     std::string_view payload) noexcept {
-    switch (status) {
-        case datamanager::GameProviderRequestStatus::Delivered:
-            if (call.result->SetString(payload)) {
-                return true;
-            }
-            return call.result->SetString(kInvalidRequestPayload);
-        case datamanager::GameProviderRequestStatus::Inactive:
-            return call.result->SetString(kInactiveProviderPayload);
-        case datamanager::GameProviderRequestStatus::SnapshotUnavailable:
-            return call.result->SetString(pendingPayload);
-        default:
-            return call.result->SetString(kInvalidRequestPayload);
+    if (call.result->SetString(
+            SelectGameProviderPayload(status, pendingPayload, payload))) {
+        return true;
     }
+    return call.result->SetString(kInvalidRequestPayload);
 }
 
 // Writes the result of the Game.* provider kProvider points to.
@@ -410,6 +421,120 @@ template <auto kProvider, const std::string_view& kPendingPayload>
     std::string payload;
     const auto status = (targets.pipBoy.*kProvider).Request(payload);
     return SetGameProviderResult(call, kPendingPayload, status, payload);
+}
+
+// Requests the provider kProvider points to and returns the JSON its Game.*
+// call would return. The text is payload or a status constant.
+template <auto kProvider, const std::string_view& kPendingPayload>
+[[nodiscard]] std::string_view ReadPipBoyProviderJson(
+    datamanager::PipBoyProviders& providers,
+    std::string& payload) noexcept {
+    const auto status = (providers.*kProvider).Request(payload);
+    return SelectGameProviderPayload(status, kPendingPayload, payload);
+}
+
+struct GameObjectSource final {
+    std::string_view name;
+    std::string_view (*readJson)(
+        datamanager::PipBoyProviders& providers,
+        std::string& payload) noexcept;
+};
+
+// The Game.* calls Game.GetAS3Object accepts. The index is the cache slot.
+constexpr std::array kGameObjectSources{
+    GameObjectSource{
+        "Game.Clock",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::time,
+            kPendingTimeDataPayload>},
+    GameObjectSource{
+        "Game.GetCollections",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::collections,
+            kPendingPipBoyCollectionsPayload>},
+    GameObjectSource{
+        "Game.GetInventory",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::inventory,
+            kPendingPipBoyInventoryPayload>},
+    GameObjectSource{
+        "Game.GetPerks",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::perks,
+            kPendingPipBoyPerksPayload>},
+    GameObjectSource{
+        "Game.GetPlayerInfo",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::playerInfo,
+            kPendingPipBoyPlayerInfoPayload>},
+    GameObjectSource{
+        "Game.GetQuests",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::quests,
+            kPendingPipBoyQuestsPayload>},
+    GameObjectSource{
+        "Game.GetSpecial",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::special,
+            kPendingPipBoySpecialPayload>},
+    GameObjectSource{
+        "Game.GetStatus",
+        &ReadPipBoyProviderJson<
+            &datamanager::PipBoyProviders::status,
+            kPendingPipBoyStatusPayload>},
+};
+
+static_assert(kGameObjectSources.size() == kGameObjectSlotCount);
+
+struct GameObjectRequest final {
+    std::size_t slot{};
+    std::string_view json;
+    ScaleformResult* result{};
+};
+
+// Builds the object in the calling movie, which owns the returned value.
+[[nodiscard]] bool WriteGameObjectResult(
+    const MovieRootContext& context,
+    void* userData) noexcept {
+    auto& request = *static_cast<GameObjectRequest*>(userData);
+    ScaleformValue object{};
+    if (!ReadGameObject(context, request.slot, request.json, object) &&
+        !ReadGameObject(context, request.slot, kInvalidRequestPayload, object)) {
+        return false;
+    }
+    request.result->SetOwnedValue(object, context.api.releaseValue);
+    return true;
+}
+
+// Game.GetAS3Object(name): the result of the Game.* call name as an
+// ActionScript object instead of a JSON string.
+[[nodiscard]] bool HandleGameObject(
+    const ScaleformCall& call,
+    const ScaleformCallbackTargets& targets) noexcept {
+    if (call.arguments == nullptr || call.argumentCount < 2) {
+        return false;
+    }
+    std::string_view name;
+    if (!TryDecodeScaleformString(
+            static_cast<const std::byte*>(call.arguments) +
+                layout::kFunctionArgumentSize,
+            name)) {
+        return false;
+    }
+    const auto source = std::find_if(
+        kGameObjectSources.begin(),
+        kGameObjectSources.end(),
+        [name](const GameObjectSource& entry) { return entry.name == name; });
+    if (source == kGameObjectSources.end()) {
+        return false;
+    }
+    std::string payload;
+    GameObjectRequest request{
+        static_cast<std::size_t>(source - kGameObjectSources.begin()),
+        source->readJson(targets.pipBoy, payload),
+        call.result,
+    };
+    return VisitMovieRoot(call.movie, &WriteGameObjectResult, &request);
 }
 
 using KeyOperation = bool (InputState::*)(std::uint8_t) noexcept;
@@ -797,6 +922,7 @@ constexpr std::array kScaleformCallbacks{
         &HandlePipBoyProvider<
             &datamanager::PipBoyProviders::time,
             kPendingTimeDataPayload>},
+    ScaleformCallbackDefinition{"Game.GetAS3Object", &HandleGameObject},
     ScaleformCallbackDefinition{
         "Game.GetCollections",
         &HandlePipBoyProvider<

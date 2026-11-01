@@ -216,7 +216,7 @@ void ClearNativeCallbackRouter(
 
 bool CommitScaleformResult(
     const FunctionParams& params,
-    const ScaleformResult& result) noexcept {
+    ScaleformResult& result) noexcept {
     switch (result.kind) {
         case ScaleformResultKind::Boolean:
             return WriteResultValue(
@@ -243,6 +243,14 @@ bool CommitScaleformResult(
                 params.result,
                 result.stringValue.data(),
                 result.stringValue.size());
+        case ScaleformResultKind::OwnedValue:
+            if (params.result == nullptr) {
+                return false;
+            }
+            std::memcpy(params.result, &result.ownedValue, sizeof(result.ownedValue));
+            RelinkMovedScaleformValue(*static_cast<ScaleformValue*>(params.result));
+            result.ForgetOwnedValue();
+            return true;
         default:
             return false;
     }

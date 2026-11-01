@@ -58,6 +58,7 @@ struct ParseError final {
 };
 
 class MemberIterator;
+class ArrayIterator;
 
 class Value final {
 public:
@@ -67,12 +68,16 @@ public:
     [[nodiscard]] Type GetType() const noexcept;
     [[nodiscard]] bool ReadBoolean(bool& value) const noexcept;
     [[nodiscard]] bool ReadInteger(std::int64_t& value) const noexcept;
+    // Reads an integer or a real number as a double.
+    [[nodiscard]] bool ReadNumber(double& value) const noexcept;
     [[nodiscard]] bool ReadString(std::string_view& value) const noexcept;
 
     [[nodiscard]] std::size_t ArraySize() const noexcept;
     [[nodiscard]] Value ArrayItem(std::size_t index) const noexcept;
 
     [[nodiscard]] MemberIterator Members() const noexcept;
+    // Visits the items in order; ArrayItem walks the array from the start.
+    [[nodiscard]] ArrayIterator Items() const noexcept;
     [[nodiscard]] Value FindMember(std::string_view name) const noexcept;
 
     [[nodiscard]] MemberStatus ReadBooleanMember(
@@ -98,6 +103,7 @@ private:
 
     friend class Document;
     friend class MemberIterator;
+    friend class ArrayIterator;
 };
 
 class MemberIterator final {
@@ -110,6 +116,18 @@ private:
     explicit MemberIterator(yyjson_val* object) noexcept;
 
     yyjson_obj_iter iterator_{};
+
+    friend class Value;
+};
+
+class ArrayIterator final {
+public:
+    [[nodiscard]] bool Next(Value& value) noexcept;
+
+private:
+    explicit ArrayIterator(yyjson_val* array) noexcept;
+
+    yyjson_arr_iter iterator_{};
 
     friend class Value;
 };
