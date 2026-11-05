@@ -1034,6 +1034,12 @@ constexpr std::array kScaleformCallbacks{
         "writeChallengeDataFile",
         &HandleQueuedFileWrite<FileCommand::WriteChallengeDataFile>},
     ScaleformCallbackDefinition{
+        "writeChatBlocklistFile",
+        &HandleQueuedFileWrite<FileCommand::WriteChatBlocklistFile>},
+    ScaleformCallbackDefinition{
+        "writeChatConfigFile",
+        &HandleQueuedFileWrite<FileCommand::WriteChatConfigFile>},
+    ScaleformCallbackDefinition{
         "writeCharacterDataFile",
         &HandleQueuedFileWrite<FileCommand::WriteCharacterDataFile>},
     ScaleformCallbackDefinition{

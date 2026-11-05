@@ -16,6 +16,8 @@ namespace sf {
 enum class FileCommand : std::uint8_t {
     WriteBuffDataFile,
     WriteChallengeDataFile,
+    WriteChatBlocklistFile,
+    WriteChatConfigFile,
     WritePerksFile,
     WriteSaveEverythingFile,
     WriteItemsModFile,
