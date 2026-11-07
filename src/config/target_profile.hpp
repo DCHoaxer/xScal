@@ -222,6 +222,7 @@ struct NativePipBoyStatusProfile final {
     std::uintptr_t getPlayerCapsCount;
     std::uintptr_t isActorGhoulRace;
     std::uintptr_t isPipBoyLightOn;
+    std::uintptr_t getActorSex;
     std::uintptr_t gameCalendarGlobal;
     std::uintptr_t gameYearSettingValue;
     std::uintptr_t lethalRadsSettingValue;

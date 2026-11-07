@@ -95,6 +95,8 @@ set(XSCAL_CORE_SOURCES
     src/input/gamepad_suppression.cpp
     src/input/xinput_hook.cpp
     src/modules/core/core_module.cpp
+    src/modules/core/game_language.cpp
+    src/modules/core/plugin_settings_menu.cpp
     src/modules/xscal_priority/xscal_priority.cpp
     src/platform/windows_memory.cpp
     src/runtime/runtime.cpp
@@ -178,7 +180,9 @@ target_link_libraries(dxgi PRIVATE
     setupapi
     winhttp
     crypt32
-    comctl32)
+    comctl32
+    shell32
+    ole32)
 target_compile_options(dxgi PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:/EHsc;/GR->
     $<$<OR:$<COMPILE_LANGUAGE:C>,$<COMPILE_LANGUAGE:CXX>>:/Gy;/Gw>)

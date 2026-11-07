@@ -37,9 +37,10 @@ void InstallCreationHooks(
 void Load() noexcept;
 
 [[nodiscard]] std::size_t ModuleCount() noexcept;
-[[nodiscard]] std::size_t CopyActiveModuleNames(
-    char* output,
-    std::size_t capacity) noexcept;
+// Name of the active module at this position, or nullptr past the last one.
+[[nodiscard]] const char* ActiveModuleName(std::size_t index) noexcept;
+// Display name of the game store build set by SetTargetKind.
+[[nodiscard]] const char* PlatformName() noexcept;
 [[nodiscard]] bool DispatchScaleform(
     std::string_view name,
     const XScalScaleformValue* arguments,

@@ -14,6 +14,7 @@
 #include "chat/chat_interface.hpp"
 #include "config/config.h"
 #include "platform/diagnostics.hpp"
+#include "modules/core/plugin_settings_menu.hpp"
 #include "plugins/plugins.hpp"
 
 #include <array>
@@ -998,6 +999,7 @@ VtableHookStatus InitializeCurrentProcess(
         plugins::SetTargetKind(profile.kind);
         plugins::SetScaleformMovieInterface(
             movieapi::Interface(), movieapi::InterfaceV1());
+        modules::InstallPluginSettingsMenu();
     }
     StartBackgroundJob(platform, std::move(job));
     return status;

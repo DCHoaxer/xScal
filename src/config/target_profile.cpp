@@ -609,6 +609,12 @@ constexpr std::array kPipBoyStatusFields{
         XSCAL_ADDRESS_IS_PIP_BOY_LIGHT_ON,
         offsetof(config::NativePipBoyStatusProfile, isPipBoyLightOn),
         FieldKind::Rva),
+    // This ID is the actor sex getter. It keeps its SDK name, which predates
+    // that finding.
+    Field(
+        XSCAL_ADDRESS_GET_PLAYER_GAME_MODE_INDEX,
+        offsetof(config::NativePipBoyStatusProfile, getActorSex),
+        FieldKind::Rva),
     Field(
         XSCAL_ADDRESS_CALENDAR_SINGLETON_GLOBAL,
         offsetof(config::NativePipBoyStatusProfile, gameCalendarGlobal),
