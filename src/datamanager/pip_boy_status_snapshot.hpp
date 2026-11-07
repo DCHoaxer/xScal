@@ -20,6 +20,7 @@ struct ResolvedPipBoyStatusRuntime final {
     std::uintptr_t getPlayerCapsCount{};
     std::uintptr_t isActorGhoulRace{};
     std::uintptr_t isPipBoyLightOn{};
+    std::uintptr_t getActorSex{};
     std::uintptr_t gameCalendarGlobal{};
     std::uintptr_t gameYearSettingValue{};
     std::uintptr_t lethalRadsSettingValue{};
@@ -78,6 +79,7 @@ struct PipBoyStatus final {
     bool irradiated{};
     bool ghoul{};
     bool pipBoyLightOn{};
+    bool isFemale{};
     std::array<std::int32_t, static_cast<std::size_t>(PipBoyResistance::Count)>
         resistances{};
     // False while the game has no calendar.

@@ -60,6 +60,10 @@ using GetPlayerCapsCount = std::int32_t(__fastcall*)(void* player);
 using IsActorGhoulRace = bool(__fastcall*)(void* actor);
 // Returns whether the player's Pip-Boy light is on. Takes no locks.
 using IsPipBoyLightOn = bool(__fastcall*)(void* player);
+// Returns 0 for male, 1 for female and -1 for none. Takes the actor's extra
+// data list read lock; Game.GetPerks already calls it from this thread.
+using GetActorSex = std::int32_t(__fastcall*)(void* actor);
+constexpr std::int32_t kFemaleSex = 1;
 // Calendar getters fall back to built-in defaults when a global is missing.
 
 struct CarryWeightValues final {
@@ -140,6 +144,20 @@ struct CarryWeightValues final {
             reinterpret_cast<void*>(player));
     } __except (platform::MemoryAccessExceptionFilter(GetExceptionCode())) {
         lightOn = false;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool CallIsActorFemale(
+    std::uintptr_t function,
+    std::uintptr_t actor,
+    bool& female) noexcept {
+    __try {
+        female = reinterpret_cast<GetActorSex>(function)(
+                     reinterpret_cast<void*>(actor)) == kFemaleSex;
+    } __except (platform::MemoryAccessExceptionFilter(GetExceptionCode())) {
+        female = false;
         return false;
     }
     return true;
@@ -369,6 +387,10 @@ constexpr std::array kPipBoyStatusRuntimeBindings{
         offsetof(ResolvedPipBoyStatusRuntime, isPipBoyLightOn),
         platform::AddressCheck::Executable),
     platform::Bind(
+        offsetof(config::NativePipBoyStatusProfile, getActorSex),
+        offsetof(ResolvedPipBoyStatusRuntime, getActorSex),
+        platform::AddressCheck::Executable),
+    platform::Bind(
         offsetof(config::NativePipBoyStatusProfile, gameCalendarGlobal),
         offsetof(ResolvedPipBoyStatusRuntime, gameCalendarGlobal),
         platform::AddressCheck::Readable),
@@ -506,6 +528,7 @@ bool ReadPipBoyStatus(
         !CallIsActorGhoulRace(runtime.isActorGhoulRace, player, result.ghoul) ||
         !CallIsPipBoyLightOn(
             runtime.isPipBoyLightOn, player, result.pipBoyLightOn) ||
+        !CallIsActorFemale(runtime.getActorSex, player, result.isFemale) ||
         !ReadGameDate(runtime, result.hasDate, result.date)) {
         return false;
     }
@@ -595,6 +618,7 @@ bool BuildPipBoyStatusJson(
             appendBool(R"(,"irradiated":)", status.irradiated);
             appendBool(R"(,"ghoul":)", status.ghoul);
             appendBool(R"(,"pipBoyLightOn":)", status.pipBoyLightOn);
+            appendBool(R"(,"isFemale":)", status.isFemale);
         }
         constexpr std::array<std::string_view, 6> kResistKeys{
             R"(},"resist":{"damage":)", R"(,"poison":)", R"(,"fire":)",
