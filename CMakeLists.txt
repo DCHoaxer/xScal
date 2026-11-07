@@ -96,6 +96,7 @@ set(XSCAL_CORE_SOURCES
     src/input/xinput_hook.cpp
     src/modules/core/core_module.cpp
     src/modules/core/game_language.cpp
+    src/modules/core/logo_animation.cpp
     src/modules/core/plugin_settings_menu.cpp
     src/modules/xscal_priority/xscal_priority.cpp
     src/platform/windows_memory.cpp
