@@ -1,6 +1,7 @@
 #include "modules/core/core_module.hpp"
 
 #include "config/config.h"
+#include "modules/core/logo_animation.hpp"
 #include "plugins/plugins.hpp"
 #include "api/scaleform_movie_interface.hpp"
 #include "scaleform/value.hpp"
@@ -21,8 +22,6 @@ struct TextStyle final {
     bool bold;
     std::uint32_t color;
 };
-
-constexpr char kBlockName[] = "xScalInfo_mc";
 
 constexpr TextStyle kTitleStyle{14.0, true, 0xE0E0E0};
 constexpr TextStyle kBuildDetailsStyle{14.0, false, 0xBABABA};
@@ -81,7 +80,7 @@ void CoreModule::Update(const MovieRootContext& context) noexcept {
         !styleText.isObject()) {
         return false;
     }
-    if (menu.call("getChildByName", kBlockName).isObject()) {
+    if (menu.call("getChildByName", kVersionBlockName).isObject()) {
         return true;
     }
 
@@ -213,7 +212,9 @@ void CoreModule::Update(const MovieRootContext& context) noexcept {
     const double blockY =
         menuHeight - bottomInset - (lastRowY + kFieldHeight) * kBlockScale;
 
-    return block.set("name", kBlockName) &&
+    // The logo animation shows the block when it ends.
+    return block.set("name", kVersionBlockName) &&
+        block.set("visible", false) &&
         block.set("x", leftInset) &&
         block.set("y", blockY) &&
         block.set("scaleX", kBlockScale) &&

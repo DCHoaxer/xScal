@@ -14,6 +14,7 @@
 #include "chat/chat_interface.hpp"
 #include "config/config.h"
 #include "platform/diagnostics.hpp"
+#include "modules/core/logo_animation.hpp"
 #include "modules/core/plugin_settings_menu.hpp"
 #include "plugins/plugins.hpp"
 
@@ -1000,6 +1001,7 @@ VtableHookStatus InitializeCurrentProcess(
         plugins::SetScaleformMovieInterface(
             movieapi::Interface(), movieapi::InterfaceV1());
         modules::InstallPluginSettingsMenu();
+        modules::InstallLogoAnimation();
     }
     StartBackgroundJob(platform, std::move(job));
     return status;
