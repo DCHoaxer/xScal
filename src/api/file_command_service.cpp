@@ -24,8 +24,8 @@ struct CommandTarget final {
 constexpr CommandTarget kCommandTargets[] = {
     {"writeBuffDataFile", L"Data\\BuffData.ini", false},
     {"writeChallengeDataFile", L"Data\\ChallengeData.ini", false},
-    {"writeChatConfigFile", L"Data\\configuration\\chatmod.ini", false},
     {"writeChatBlocklistFile", L"Data\\configuration\\blocklist.ini", false},
+    {"writeChatConfigFile", L"Data\\configuration\\chatmod.ini", false},
     {"writePerksFile", L"Data\\perkloadoutmanager.ini", false},
     {"writeSaveEverythingFile", L"Data\\saveeverything.ini", false},
     {"writeItemsModFile", L"Data\\itemsmod.ini", false},

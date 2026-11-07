@@ -231,7 +231,7 @@ struct ScaleformCallbackDefinition final {
     }
 
     std::string line;
-    if (!chat::BuildChatLogLine(message, line)) {
+    if (!chat::BuildChatLogLine(prefix, message, line)) {
         return true;
     }
     DiagnosticLog(line.c_str());
@@ -1046,14 +1046,14 @@ constexpr std::array kScaleformCallbacks{
         "writeChallengeDataFile",
         &HandleQueuedFileWrite<FileCommand::WriteChallengeDataFile>},
     ScaleformCallbackDefinition{
+        "writeCharacterDataFile",
+        &HandleQueuedFileWrite<FileCommand::WriteCharacterDataFile>},
+    ScaleformCallbackDefinition{
         "writeChatBlocklistFile",
         &HandleQueuedFileWrite<FileCommand::WriteChatBlocklistFile>},
     ScaleformCallbackDefinition{
         "writeChatConfigFile",
         &HandleQueuedFileWrite<FileCommand::WriteChatConfigFile>},
-    ScaleformCallbackDefinition{
-        "writeCharacterDataFile",
-        &HandleQueuedFileWrite<FileCommand::WriteCharacterDataFile>},
     ScaleformCallbackDefinition{
         "writeDPSMeterFile",
         &HandleQueuedFileWrite<FileCommand::WriteDPSMeterFile>},
