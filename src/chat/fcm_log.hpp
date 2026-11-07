@@ -8,9 +8,10 @@ namespace sf::chat {
 
 inline constexpr std::size_t kMaximumFcmLogLineBytes = 960;
 
-// Prefixes one FCM message and replaces control characters with spaces so
+// Prefixes one message from a chat mod and replaces control characters with spaces so
 // DiagnosticLog writes exactly one timestamped line.
-[[nodiscard]] bool BuildFcmLogLine(
+[[nodiscard]] bool BuildChatLogLine(
+    std::string_view prefix,
     std::string_view message,
     std::string& line) noexcept;
 

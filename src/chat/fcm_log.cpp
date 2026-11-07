@@ -13,7 +13,8 @@ namespace {
 
 }  // namespace
 
-bool BuildFcmLogLine(
+bool BuildChatLogLine(
+    std::string_view prefix,
     std::string_view message,
     std::string& line) noexcept {
     line.clear();
@@ -21,7 +22,6 @@ bool BuildFcmLogLine(
         return false;
     }
     try {
-        constexpr std::string_view prefix{"FCM: "};
         line.reserve((std::min)(
             kMaximumFcmLogLineBytes,
             prefix.size() + message.size()));

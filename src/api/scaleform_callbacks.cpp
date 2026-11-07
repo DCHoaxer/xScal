@@ -64,6 +64,10 @@ constexpr std::string_view kPendingPipBoyCollectionsPayload =
     R"json({"status":"pending","reason":"collections"})json";
 constexpr std::string_view kInvalidRequestPayload =
     R"json({"status":"error","reason":"invalid_request"})json";
+constexpr std::string_view kFcmChatWidgetVendor = "FCMChatWidget";
+constexpr std::string_view kFcmPrefix = "FCM: ";
+constexpr std::string_view kTextChatVendor = "TextChat";
+constexpr std::string_view kTextChatPrefix = "TextChat: ";
 
 // Non-owning view of the router's dependencies. The router builds one per
 // Dispatch call.
@@ -201,7 +205,7 @@ struct ScaleformCallbackDefinition final {
     return true;
 }
 
-[[nodiscard]] bool LogFcmMessage(
+[[nodiscard]] bool LogChatMessage(
     const ScaleformCall& call,
     const ScaleformCallbackTargets&) noexcept {
     call.result->SetBoolean(false);
@@ -212,14 +216,22 @@ struct ScaleformCallbackDefinition final {
     if (!payload.IsObject() ||
         payload.ReadString("vendor", vendor) !=
             chat::PayloadMemberStatus::Found ||
-        vendor != "FCMChatWidget" ||
         payload.ReadString("message", message) !=
             chat::PayloadMemberStatus::Found) {
         return true;
     }
 
+    std::string prefix;
+    if (vendor == kFcmChatWidgetVendor) {
+        prefix = kFcmPrefix;
+    } else if (vendor == kTextChatVendor) {
+        prefix = kTextChatPrefix;
+    } else {
+        return true;
+    }
+
     std::string line;
-    if (!chat::BuildFcmLogLine(message, line)) {
+    if (!chat::BuildChatLogLine(message, line)) {
         return true;
     }
     DiagnosticLog(line.c_str());
@@ -1017,7 +1029,7 @@ constexpr std::array kScaleformCallbacks{
     ScaleformCallbackDefinition{
         "Input.UnsuppressKey",
         &HandleKeyOperation<&InputState::UnsuppressKey>},
-    ScaleformCallbackDefinition{"log", &LogFcmMessage},
+    ScaleformCallbackDefinition{"log", &LogChatMessage},
     ScaleformCallbackDefinition{
         "writeBlockFile",
         &HandleQueuedFileWrite<FileCommand::WriteBlockFile>},
