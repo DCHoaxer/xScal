@@ -9,12 +9,43 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 
 namespace sf::modules {
 namespace {
 
-constexpr char kTextName[] = "xScalInfoText_tf";
+struct TextStyle final {
+    double size;
+    bool bold;
+    std::uint32_t color;
+};
+
+constexpr char kBlockName[] = "xScalInfo_mc";
+
+constexpr TextStyle kTitleStyle{14.0, true, 0xE0E0E0};
+constexpr TextStyle kBuildDetailsStyle{14.0, false, 0xBABABA};
+constexpr TextStyle kLabelStyle{12.0, false, 0xE0E0E0};
+constexpr TextStyle kValueStyle{12.0, false, 0xBABABA};
+
+// Row offsets from the top of the block.
+constexpr double kPluginsLabelY = 18.0;
+constexpr double kPluginRowsY = 32.0;
+constexpr double kPluginRowHeight = 14.0;
+constexpr std::size_t kPluginRowsPerColumn = 2;
+
+// Minimum plugin column width, and the minimum offset of the build details after
+// the title.
+constexpr double kColumnWidth = 88.0;
+constexpr double kColumnGap = 12.0;
+constexpr double kBuildDetailsGap = 6.0;
+constexpr double kFieldWidth = 400.0;
+constexpr double kFieldHeight = 22.0;
+
+// The font sizes are screen pixels from the layout mockup. Menu_mc is scaled by
+// 1.5 at 1920x1080, so this draws the text at the mockup's size there.
+constexpr double kBlockScale = 2.0 / 3.0;
 
 }  // namespace
 
@@ -50,92 +81,146 @@ void CoreModule::Update(const MovieRootContext& context) noexcept {
         !styleText.isObject()) {
         return false;
     }
-    if (menu.call("getChildByName", kTextName).isObject()) {
+    if (menu.call("getChildByName", kBlockName).isObject()) {
         return true;
     }
 
-    double width{};
-    double height{};
-    if (!versionText.get("width").read(width) ||
-        !versionText.get("height").read(height)) {
+    // The block joins the menu only after all of its fields exist, so a retry
+    // after a failed field does not leave a partial block on screen.
+    const xscal::Value block = movie.create("flash.display.Sprite");
+    if (block.type() != XSCAL_MOVIE_TYPE_DISPLAY_OBJECT) {
         return false;
+    }
+
+    const auto addText = [&](
+        const char* text,
+        double x,
+        double y,
+        const TextStyle& style,
+        double* textWidth = nullptr) noexcept {
+        const xscal::Value format = versionText.get("defaultTextFormat");
+        if (!format.isObject() ||
+            !format.set("font", "$MAIN_Font") ||
+            !format.set("bold", style.bold) ||
+            !format.set("size", style.size) ||
+            !format.set("align", "left")) {
+            return false;
+        }
+
+        const xscal::Value field = movie.create("flash.text.TextField");
+        if (field.type() != XSCAL_MOVIE_TYPE_DISPLAY_OBJECT) {
+            return false;
+        }
+        // setTextFormat applies the font to the text; defaultTextFormat alone
+        // is not used when a runtime-created field is drawn.
+        const bool fieldReady = field.set("defaultTextFormat", format) &&
+            field.set("text", text) &&
+            field.set("x", x) &&
+            field.set("y", y) &&
+            field.set("width", kFieldWidth) &&
+            field.set("height", kFieldHeight) &&
+            field.set("alpha", 1.0) &&
+            field.set("visible", true) &&
+            field.set("embedFonts", false) &&
+            field.set("selectable", false) &&
+            field.set("mouseEnabled", false) &&
+            field.setTextFormat(format) &&
+            field.set("textColor", style.color) &&
+            field.set("filters", styleText.get("filters")) &&
+            field.set("antiAliasType", styleText.get("antiAliasType")) &&
+            block.call("addChild", field).valid();
+        if (fieldReady && textWidth != nullptr) {
+            field.get("textWidth").read(*textWidth);
+        }
+        return fieldReady;
+    };
+
+    std::array<char, 32> title{};
+    const int titleLength = std::snprintf(
+        title.data(),
+        title.size(),
+        "xScal %u.%u.%u",
+        static_cast<unsigned int>(config::kXScalVersion.major),
+        static_cast<unsigned int>(config::kXScalVersion.minor),
+        static_cast<unsigned int>(config::kXScalVersion.patch));
+    if (titleLength <= 0 ||
+        static_cast<std::size_t>(titleLength) >= title.size()) {
+        return false;
+    }
+
+    std::array<char, 64> buildDetails{};
+    const int buildDetailsLength = std::snprintf(
+        buildDetails.data(),
+        buildDetails.size(),
+        "(Built %s %s) %s",
+        build_info::kDate,
+        build_info::kTime,
+        plugins::PlatformName());
+    if (buildDetailsLength <= 0 ||
+        static_cast<std::size_t>(buildDetailsLength) >= buildDetails.size()) {
+        return false;
+    }
+
+    double titleWidth{};
+    if (!addText(title.data(), 0.0, 0.0, kTitleStyle, &titleWidth)) {
+        return false;
+    }
+    const double buildDetailsX =
+        (std::max)(kColumnWidth, titleWidth + kBuildDetailsGap);
+    if (!addText(buildDetails.data(), buildDetailsX, 0.0, kBuildDetailsStyle)) {
+        return false;
+    }
+
+    const bool hasPlugins = plugins::ActiveModuleName(0) != nullptr;
+    if (hasPlugins && !addText("Plugins", 0.0, kPluginsLabelY, kLabelStyle)) {
+        return false;
+    }
+
+    // Plugins fill two rows, then continue in a new column to the right, so
+    // the block height does not depend on the plugin count.
+    double columnX = 0.0;
+    double columnWidth = kColumnWidth;
+    for (std::size_t index = 0;; ++index) {
+        const char* const name = plugins::ActiveModuleName(index);
+        if (name == nullptr) {
+            break;
+        }
+        const std::size_t row = index % kPluginRowsPerColumn;
+        if (index != 0 && row == 0) {
+            columnX += columnWidth;
+            columnWidth = kColumnWidth;
+        }
+        double textWidth{};
+        if (!addText(
+                name,
+                columnX,
+                kPluginRowsY + static_cast<double>(row) * kPluginRowHeight,
+                kValueStyle,
+                &textWidth)) {
+            return false;
+        }
+        columnWidth = (std::max)(columnWidth, textWidth + kColumnGap);
     }
 
     // Menu_mc is authored at 1280x720; its parent applies the screen scale.
-    constexpr double edgeInset = 16.0;
+    constexpr double leftInset = 16.0;
+    constexpr double bottomInset = 1.0;
     constexpr double menuHeight = 720.0;
-    constexpr double verticalOffset = 15.0;
-    const double textX = edgeInset;
-    const double textY =
-        menuHeight - height - edgeInset + verticalOffset;
+    const double lastRowY = hasPlugins
+        ? kPluginRowsY +
+            static_cast<double>(kPluginRowsPerColumn - 1) * kPluginRowHeight
+        : 0.0;
+    const double blockY =
+        menuHeight - bottomInset - (lastRowY + kFieldHeight) * kBlockScale;
 
-    const xscal::Value format = versionText.get("defaultTextFormat");
-    if (!format.isObject() ||
-        !format.set("font", "$MAIN_Font") ||
-        !format.set("bold", true) ||
-        !format.set("size", 12.0) ||
-        !format.set("align", "left")) {
-        return false;
-    }
-
-    const xscal::Value textField = movie.create("flash.text.TextField");
-    if (textField.type() != XSCAL_MOVIE_TYPE_DISPLAY_OBJECT) {
-        return false;
-    }
-
-    std::array<char, 512> pluginNames{};
-    const std::size_t pluginNamesLength =
-        plugins::CopyActiveModuleNames(
-            pluginNames.data(), pluginNames.size());
-    std::array<char, 640> text{};
-    const int textLength = pluginNamesLength == 0
-        ? std::snprintf(
-            text.data(),
-            text.size(),
-            "xScal %u.%u.%u (Built %s %s) with AddressLibrary",
-            static_cast<unsigned int>(config::kXScalVersion.major),
-            static_cast<unsigned int>(config::kXScalVersion.minor),
-            static_cast<unsigned int>(config::kXScalVersion.patch),
-            build_info::kDate,
-            build_info::kTime)
-        : std::snprintf(
-            text.data(),
-            text.size(),
-            "xScal %u.%u.%u (Built %s %s, Plugins: %.*s) with AddressLibrary",
-            static_cast<unsigned int>(config::kXScalVersion.major),
-            static_cast<unsigned int>(config::kXScalVersion.minor),
-            static_cast<unsigned int>(config::kXScalVersion.patch),
-            build_info::kDate,
-            build_info::kTime,
-            static_cast<int>(pluginNamesLength),
-            pluginNames.data());
-    if (textLength <= 0 ||
-        static_cast<std::size_t>(textLength) >= text.size()) {
-        return false;
-    }
-
-    const double textWidth = (std::min)(
-        1000.0,
-        (std::max)(width * 1.5, static_cast<double>(textLength) * 7.0));
-    // setTextFormat applies the font to the text; defaultTextFormat alone is
-    // not used when a runtime-created field is drawn.
-    return textField.set("defaultTextFormat", format) &&
-        textField.set("name", kTextName) &&
-        textField.set("text", text.data()) &&
-        textField.set("x", textX) &&
-        textField.set("y", textY) &&
-        textField.set("width", textWidth) &&
-        textField.set("height", height) &&
-        textField.set("alpha", 1.0) &&
-        textField.set("visible", true) &&
-        textField.set("embedFonts", false) &&
-        textField.set("selectable", false) &&
-        textField.set("mouseEnabled", false) &&
-        textField.setTextFormat(format) &&
-        textField.set("textColor", styleText.get("textColor")) &&
-        textField.set("filters", styleText.get("filters")) &&
-        textField.set("antiAliasType", styleText.get("antiAliasType")) &&
-        menu.call("addChild", textField).valid();
+    return block.set("name", kBlockName) &&
+        block.set("x", leftInset) &&
+        block.set("y", blockY) &&
+        block.set("scaleX", kBlockScale) &&
+        block.set("scaleY", kBlockScale) &&
+        block.set("mouseEnabled", false) &&
+        block.set("mouseChildren", false) &&
+        menu.call("addChild", block).valid();
 }
 
 }  // namespace sf::modules

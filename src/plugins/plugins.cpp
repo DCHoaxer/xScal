@@ -1256,38 +1256,27 @@ std::size_t ModuleCount() noexcept {
         [](const auto& module) { return module.active; }));
 }
 
-std::size_t CopyActiveModuleNames(
-    char* output,
-    std::size_t capacity) noexcept {
-    if (output == nullptr || capacity == 0) {
-        return 0;
-    }
-    output[0] = '\0';
+const char* ActiveModuleName(std::size_t index) noexcept {
     Load();
 
-    std::size_t length{};
     for (const auto& module : modules) {
         if (!module.active) {
             continue;
         }
-        const std::size_t nameLength =
-            std::strlen(module.descriptor.name);
-        const std::size_t separatorLength = length == 0 ? 0 : 2;
-        if (separatorLength + nameLength >= capacity - length) {
-            break;
+        if (index == 0) {
+            return module.descriptor.name;
         }
-        if (separatorLength != 0) {
-            std::memcpy(output + length, ", ", separatorLength);
-            length += separatorLength;
-        }
-        std::memcpy(
-            output + length,
-            module.descriptor.name,
-            nameLength);
-        length += nameLength;
-        output[length] = '\0';
+        --index;
     }
-    return length;
+    return nullptr;
+}
+
+const char* PlatformName() noexcept {
+    switch (targetKind) {
+        case XSCAL_TARGET_STEAM: return "Steam";
+        case XSCAL_TARGET_GAMEPASS: return "Game Pass";
+        default: return "Unknown";
+    }
 }
 
 }
