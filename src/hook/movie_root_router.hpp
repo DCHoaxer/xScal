@@ -3,6 +3,7 @@
 #include "hook/movie_root_hook.hpp"
 #include "scaleform/bridge_attachment.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -36,6 +37,9 @@ public:
         MovieRootVisitor visitor,
         void* userData) noexcept;
 
+    // Called by the MovieRoot destructor hook before the original destructor.
+    void ForgetMovieRoot(void* movieRoot) noexcept;
+
 private:
     VtableHookPlatform platform_;
     std::shared_ptr<NativeFunctionHandler> functionHandler_;
@@ -43,6 +47,9 @@ private:
     void* expectedVtable_{};
     ResolvedScaleformApi api_{};
     std::uint64_t validationGeneration_{};
+    // Counts destroyed MovieRoots. Per-thread validation cache entries filled
+    // under an older count are dropped on their next lookup.
+    std::atomic<std::uint64_t> destroyedMovieRoots_{};
     BridgeAttachmentService attachments_;
 };
 

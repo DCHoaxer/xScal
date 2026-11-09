@@ -299,6 +299,10 @@ void* __fastcall HookedMovieRootDestroy(
     movieapi::ReleaseMovie(movieRoot);
     movieapi::ForgetMovie(movieRoot);
     ReleaseGameObjects(movieRoot);
+    if (const auto routeState =
+            activeRouteState.load(std::memory_order_acquire)) {
+        routeState->ForgetMovieRoot(movieRoot);
+    }
     return original(movieRoot, flags);
 }
 

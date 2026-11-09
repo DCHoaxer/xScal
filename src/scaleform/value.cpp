@@ -86,7 +86,8 @@ bool GetScaleformBoolean(
     if (type != layout::kBooleanType) {
         return false;
     }
-    result = ReadPayloadValue<std::uint64_t>(value) != 0;
+    // The boolean is one byte; the bytes above it are not cleared.
+    result = (ReadPayloadValue<std::uint64_t>(value) & 0xFF) != 0;
     return true;
 }
 
@@ -104,7 +105,7 @@ bool GetScaleformNumber(
         InspectScaleformValue(value).rawType & layout::kTypeMask);
     switch (type) {
         case layout::kBooleanType:
-            result = ReadPayloadValue<std::uint64_t>(value) != 0
+            result = (ReadPayloadValue<std::uint64_t>(value) & 0xFF) != 0
                 ? 1.0
                 : 0.0;
             break;

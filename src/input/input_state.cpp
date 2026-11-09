@@ -40,7 +40,7 @@ LRESULT CALLBACK KeyboardWindowProcedure(
     UINT message,
     WPARAM wParam,
     LPARAM lParam,
-    UINT_PTR,
+    UINT_PTR subclassId,
     DWORD_PTR referenceData) {
     if (message == WM_NULL && lParam == kSubclassDispatchMarker) {
         return DefSubclassProc(window, message, wParam, lParam);
@@ -54,6 +54,12 @@ LRESULT CALLBACK KeyboardWindowProcedure(
             return DefWindowProcW(window, message, wParam, lParam);
         }
         return message == WM_UNICHAR && wParam == UNICODE_NOCHAR ? TRUE : 0;
+    }
+    if (message == WM_NCDESTROY) {
+        // FilterKeyboardMessage has dropped the window, so the next install
+        // subclasses the window that is in the foreground then.
+        (void)::RemoveWindowSubclass(
+            window, &KeyboardWindowProcedure, subclassId);
     }
     return DefSubclassProc(window, message, wParam, lParam);
 }
@@ -641,12 +647,37 @@ bool InputState::FilterKeyboardMessage(
     std::intptr_t lParam) noexcept {
     std::scoped_lock lock{mutex_};
     const auto key = static_cast<std::uint8_t>(wParam & 0xFFU);
+    if (message == WM_KILLFOCUS || message == WM_NCDESTROY ||
+        (message == WM_ACTIVATEAPP && wParam == FALSE)) {
+        // Keys still held when the window loses focus get no key-up or break
+        // code here. Their marks would consume the key-up or the make code of
+        // the next press.
+        textInputKeysDown_.reset();
+        textInputReleaseKeys_.reset();
+        consumedDownKeys_.reset();
+        consumedRawDownKeys_.reset();
+        swallowNextChar_ = false;
+    }
+    if (message == WM_NCDESTROY) {
+        // Takes a finished install first, so its window is not stored after
+        // being destroyed.
+        TakeSubclassInstallResult(false);
+        subclassWindow_ = nullptr;
+        if (textInputSession_ != 0 &&
+            textInputStatus_ == TextInputStatus::Active) {
+            textInputStatus_ = TextInputStatus::Cancelled;
+            ++textInputRevision_;
+        }
+        return false;
+    }
     if (message == WM_KEYUP || message == WM_SYSKEYUP) {
         swallowNextChar_ = false;
-        textInputKeysDown_.reset(key);
-        const bool consumed = textInputSession_ != 0 ||
+        // Only a key-up whose key-down was consumed is consumed. A key held
+        // since before the text session started gives its key-up to the game.
+        const bool consumed = textInputKeysDown_.test(key) ||
             textInputReleaseKeys_.test(key) ||
             consumedDownKeys_.test(key);
+        textInputKeysDown_.reset(key);
         textInputReleaseKeys_.reset(key);
         consumedDownKeys_.reset(key);
         return consumed;
@@ -661,7 +692,14 @@ bool InputState::FilterKeyboardMessage(
         return IsKeyboardRawInput(lParam);
     }
     if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
-        textInputKeysDown_.set(key);
+        // Bit 30 is set for auto-repeat. The repeat of a key held since before
+        // the session is consumed, but the game saw its key-down, so its
+        // key-up is not marked for consumption.
+        const bool isRepeat =
+            ((static_cast<std::uintptr_t>(lParam) >> 30) & 1U) != 0;
+        if (!isRepeat) {
+            textInputKeysDown_.set(key);
+        }
         if (textInputStatus_ != TextInputStatus::Active) {
             return true;
         }

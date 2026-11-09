@@ -214,13 +214,18 @@ bool Service::QueueWriteLocked(
 }
 
 bool Service::LoadLocked(std::string_view name, std::string& document) {
-    // The saved copy is newer than the file only until its write finishes.
-    // After that the file is read again, so edits made outside the game load.
+    // The saved copy is newer than the file until its write finishes, or for
+    // as long as the last write failed and the file still holds older data.
+    // After a successful write the file is read again, so edits made outside
+    // the game load.
     const auto cached = documents_.find(std::string{name});
-    if (cached != documents_.end() && fileWriter_ != nullptr &&
-        fileWriter_->IsWriteQueued(StorageRelativePath(name))) {
-        document = cached->second;
-        return true;
+    if (cached != documents_.end() && fileWriter_ != nullptr) {
+        const std::wstring relative = StorageRelativePath(name);
+        if (fileWriter_->IsWriteQueued(relative) ||
+            fileWriter_->HasFailedWrite(relative)) {
+            document = cached->second;
+            return true;
+        }
     }
     return LoadDocument(name, document);
 }

@@ -2,6 +2,7 @@
 
 #include "common/ascii_case.hpp"
 #include "common/json.hpp"
+#include "datamanager/game_string.hpp"
 #include "platform/diagnostics.hpp"
 #include "platform/native_access.hpp"
 #include "scaleform/scaleform_layout.hpp"
@@ -26,13 +27,6 @@ namespace {
 constexpr std::size_t kMaximumEffects = 4096;
 constexpr std::size_t kMaximumStringLength = 0x10000;
 constexpr std::size_t kMaximumSnapshotLength = layout::kMaxReturnStringLength;
-
-struct GameString final {
-    char* data{};
-    std::uint16_t length{};
-    std::uint16_t capacity{};
-};
-static_assert(sizeof(GameString) == 0x10);
 
 struct MagnitudeDisplayInfo final {
     std::uint8_t hasMagnitude{};
@@ -87,30 +81,10 @@ using FormatEffectText = void(__fastcall*)(
     void* const* effect,
     GameString* text,
     std::uint8_t* usedFallback);
-using Deallocate = void(__fastcall*)(void* memory);
 using ReleaseEffect = void(__fastcall*)(void* effect, std::uint8_t release);
 using GetActiveEffects = void*(__fastcall*)(void* magicTarget);
 using ActiveEffectsLockOperation = void(__fastcall*)(void* lock);
 using GetFullName = const char*(__fastcall*)(const void* fullNameComponent);
-
-class GameAllocationGuard final {
-public:
-    GameAllocationGuard(Deallocate deallocate, void* memory) noexcept
-        : deallocate_(deallocate), memory_(memory) {}
-
-    GameAllocationGuard(const GameAllocationGuard&) = delete;
-    GameAllocationGuard& operator=(const GameAllocationGuard&) = delete;
-
-    ~GameAllocationGuard() {
-        if (memory_ != nullptr) {
-            deallocate_(memory_);
-        }
-    }
-
-private:
-    Deallocate deallocate_{};
-    void* memory_{};
-};
 
 [[nodiscard]] int MemoryAccessExceptionFilter(
     unsigned long exceptionCode) noexcept {
@@ -118,6 +92,78 @@ private:
             exceptionCode == EXCEPTION_IN_PAGE_ERROR
         ? EXCEPTION_EXECUTE_HANDLER
         : EXCEPTION_CONTINUE_SEARCH;
+}
+
+[[nodiscard]] bool CallGetActiveEffects(
+    std::uintptr_t function,
+    std::uintptr_t magicTarget,
+    void*& activeEffects) noexcept {
+    __try {
+        activeEffects = reinterpret_cast<GetActiveEffects>(function)(
+            reinterpret_cast<void*>(magicTarget));
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        activeEffects = nullptr;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool CallIsEligible(
+    std::uintptr_t function,
+    void* const* effect,
+    bool& eligible) noexcept {
+    __try {
+        eligible = reinterpret_cast<EffectPredicate>(function)(effect);
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        eligible = false;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool CallIsDisplayable(
+    std::uintptr_t function,
+    void* const* effect,
+    float displayTime,
+    bool& displayable) noexcept {
+    __try {
+        displayable = reinterpret_cast<EffectDisplayPredicate>(function)(
+            effect, displayTime);
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        displayable = false;
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool CallGetMagnitudeDisplayInfo(
+    std::uintptr_t function,
+    void* const* effect,
+    MagnitudeDisplayInfo& info) noexcept {
+    const MagnitudeDisplayInfo* result{};
+    __try {
+        result = reinterpret_cast<GetMagnitudeDisplayInfo>(function)(
+            &info, effect);
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        return false;
+    }
+    return result == &info;
+}
+
+// The caller owns text before this call, so a buffer the game allocated
+// before a fault is still freed.
+[[nodiscard]] bool CallFormatEffectText(
+    std::uintptr_t function,
+    void* const* effect,
+    GameString& text) noexcept {
+    std::uint8_t usedFallback{};
+    __try {
+        reinterpret_cast<FormatEffectText>(function)(
+            effect, &text, &usedFallback);
+    } __except (MemoryAccessExceptionFilter(GetExceptionCode())) {
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] bool TryReadEffectSpell(
@@ -460,13 +506,14 @@ private:
         return FailLocalPlayerEffects("player_type_mismatch");
     }
 
-    const auto getActiveEffects =
-        reinterpret_cast<GetActiveEffects>(runtime.getActiveEffects);
     const auto releaseReadLock =
         reinterpret_cast<ActiveEffectsLockOperation>(
             runtime.releaseActiveEffectsReadLock);
-    void* const activeEffects = getActiveEffects(
-        reinterpret_cast<void*>(localTarget));
+    void* activeEffects{};
+    if (!CallGetActiveEffects(
+            runtime.getActiveEffects, localTarget, activeEffects)) {
+        return FailLocalPlayerEffects("active_effects_call_failed");
+    }
 
     effects.clear();
     if (activeEffects != nullptr) {
@@ -532,13 +579,16 @@ private:
             return FailLocalPlayerEffects("array_storage_unavailable");
         }
 
+        // An effect that cannot be read, or whose reference count already
+        // reached zero while it is still listed, is left out; the other
+        // listed effects are still valid.
         for (std::size_t index = 0; index < count; ++index) {
             const auto effect = effectPointers[index];
             if (effect != 0) {
                 if (effect >
                     (std::numeric_limits<std::uintptr_t>::max)() -
                         profile.effectTargetOffset) {
-                    return FailLocalPlayerEffects("effect_retain_failed");
+                    continue;
                 }
                 std::uintptr_t target{};
                 if (!platform::TryCopyBytes(
@@ -546,7 +596,7 @@ private:
                             effect + profile.effectTargetOffset),
                         &target,
                         sizeof(target))) {
-                    return FailLocalPlayerEffects("effect_retain_failed");
+                    continue;
                 }
                 if (target != localTarget) {
                     continue;
@@ -557,7 +607,7 @@ private:
                         virtualQuery,
                         effect,
                         retained)) {
-                    return FailLocalPlayerEffects("effect_retain_failed");
+                    continue;
                 }
                 effects.push_back(std::move(retained));
             }
@@ -686,18 +736,8 @@ bool BuildNativeActiveEffectJsonSnapshot(
             return false;
         }
         const auto& profile = runtime.layout;
-
-        const auto isEligible =
-            reinterpret_cast<EffectPredicate>(runtime.isEligible);
-        const auto isDisplayable =
-            reinterpret_cast<EffectDisplayPredicate>(runtime.isDisplayable);
-        const auto getMagnitudeDisplayInfo =
-            reinterpret_cast<GetMagnitudeDisplayInfo>(
-                runtime.getMagnitudeDisplayInfo);
-        const auto format =
-            reinterpret_cast<FormatEffectText>(runtime.formatEffectText);
         const auto deallocate =
-            reinterpret_cast<Deallocate>(runtime.deallocate);
+            reinterpret_cast<GameDeallocate>(runtime.deallocate);
 
         std::vector<StrongEffect> retainedEffects;
         std::uintptr_t verifiedSourcePlayer{};
@@ -749,10 +789,18 @@ bool BuildNativeActiveEffectJsonSnapshot(
                 continue;
             }
 
-            const bool eligible = isEligible(&effectArgument);
-            const bool displayable = eligible &&
-                isDisplayable(&effectArgument, duration);
-            if (!displayable) {
+            // An effect whose game calls fault is left out like one that is
+            // not displayable.
+            bool eligible{};
+            bool displayable{};
+            if (!CallIsEligible(runtime.isEligible, &effectArgument, eligible) ||
+                !eligible ||
+                !CallIsDisplayable(
+                    runtime.isDisplayable,
+                    &effectArgument,
+                    duration,
+                    displayable) ||
+                !displayable) {
                 continue;
             }
 
@@ -764,25 +812,23 @@ bool BuildNativeActiveEffectJsonSnapshot(
                 remaining > 0.0F &&
                 remaining <= 2147483600.0F;
 
+            // A magnitude the game cannot report as a finite number leaves
+            // out only this effect. It is not logged because the same effect
+            // stays listed and would log on every poll.
             MagnitudeDisplayInfo magnitudeInfo{};
-            const auto* const magnitudeResult = getMagnitudeDisplayInfo(
-                &magnitudeInfo,
-                &effectArgument);
-            if (magnitudeResult != &magnitudeInfo ||
+            if (!CallGetMagnitudeDisplayInfo(
+                    runtime.getMagnitudeDisplayInfo,
+                    &effectArgument,
+                    magnitudeInfo) ||
                 (magnitudeInfo.hasMagnitude != 0 &&
                     !std::isfinite(magnitudeInfo.magnitude))) {
-                DiagnosticLog(
-                    "xScal: StatsEffects snapshot failed: magnitude_info");
-                return false;
+                continue;
             }
 
             GameString formatted{};
-            std::uint8_t usedFallback{};
-            format(&effectArgument, &formatted, &usedFallback);
-            const GameAllocationGuard formattedOwner{
-                deallocate,
-                formatted.data};
-            if (formatted.data == nullptr || formatted.length == 0) {
+            const GameStringOwner formattedOwner{deallocate, formatted};
+            if (!CallFormatEffectText(
+                    runtime.formatEffectText, &effectArgument, formatted)) {
                 continue;
             }
             EffectEntrySnapshot entrySnapshot{
@@ -794,14 +840,14 @@ bool BuildNativeActiveEffectJsonSnapshot(
                 .hasMagnitude = magnitudeInfo.hasMagnitude != 0,
                 .isPercentage = magnitudeInfo.isPercentage != 0,
             };
-            entrySnapshot.text.resize(formatted.length);
-            if (!platform::TryCopyBytes(
-                    formatted.data,
-                    entrySnapshot.text.data(),
-                    formatted.length)) {
+            if (!CopyGameString(
+                    formatted, kMaximumStringLength, entrySnapshot.text)) {
                 DiagnosticLog(
                     "xScal: StatsEffects snapshot failed: formatted_text");
                 return false;
+            }
+            if (entrySnapshot.text.empty()) {
+                continue;
             }
 
             auto group = std::find_if(

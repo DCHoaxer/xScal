@@ -56,7 +56,7 @@ bool BuildChatLogLine(
         while (line.size() > prefix.size() && line.back() == ' ') {
             line.pop_back();
         }
-        if (line.size() == prefix.size()) {
+        if (!line.empty() && line.size() == prefix.size()) {
             line.pop_back();
         }
         return true;

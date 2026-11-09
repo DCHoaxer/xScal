@@ -13,6 +13,12 @@ constexpr json::ParseOptions kRelayJsonOptions{
     64,
     true};
 
+constexpr json::ParseOptions kSubscriberJsonOptions{
+    json::NumberSyntax::SignedInteger,
+    kMaximumSubscriberMessageBytes,
+    64,
+    true};
+
 [[nodiscard]] bool AddStringMember(
     std::string_view name,
     std::string_view value,
@@ -203,7 +209,7 @@ bool BuildSubscribeRequest(
         AddStringMember("clientVersion", clientVersion, false, request) &&
         AddIntegerMember(
             "cursor", static_cast<std::int64_t>(cursor), false, request) &&
-        AddIntegerMember("max", 64, false, request) &&
+        AddIntegerMember("max", kSubscribeBatchEvents, false, request) &&
         Finish(request);
 }
 
@@ -267,22 +273,25 @@ SubscriberReply ParseSubscriberReply(
     std::string_view response) noexcept {
     SubscriberReply reply;
     json::Document document;
-    if (!json::ParseDocument(response, kRelayJsonOptions, document) ||
+    if (!json::ParseDocument(response, kSubscriberJsonOptions, document) ||
         document.Root().GetType() != json::Type::Object) {
         return reply;
     }
     const auto root = document.Root();
     reply.parsed = true;
     try {
+        // Request replies carry success, code and message without op (see
+        // ParseRelayOperationReply). A subscriber frame in that form with
+        // success false is a rejection, like "subscribed" with success false.
         std::string_view operation;
+        const auto operationStatus = root.ReadStringMember("op", operation);
         bool success{};
-        if (root.ReadStringMember("op", operation) ==
-                json::MemberStatus::Found &&
-            operation == "subscribed") {
-            if (root.ReadBooleanMember("success", success) ==
-                    json::MemberStatus::Found) {
-                reply.rejected = !success;
-            }
+        if ((operationStatus == json::MemberStatus::Missing ||
+             (operationStatus == json::MemberStatus::Found &&
+              operation == "subscribed")) &&
+            root.ReadBooleanMember("success", success) ==
+                json::MemberStatus::Found) {
+            reply.rejected = !success;
         }
         (void)ReadUnsignedMember(root, "cursor", reply.cursor);
         CopyStringMember(root, "code", reply.code);

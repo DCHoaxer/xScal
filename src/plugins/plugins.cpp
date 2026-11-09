@@ -911,13 +911,22 @@ void AppendNumber(double value, std::string& output) {
         output += '0';
 }
 
+// Each option listed by xsGetPluginOptions takes more than 40 bytes of the
+// result string, so one result never holds more options than this. Options
+// at higher indexes are not read: they are read on the game thread, and an
+// unbounded count from a plugin could stall it for billions of calls.
+constexpr uint32_t kMaximumPluginOptions =
+    XSCAL_SCALEFORM_MAX_RESULT_STRING_BYTES / 40u;
+
 // Reads every option of a module as a version 2 option. Version 1 options
 // become toggles.
 template<class Visit>
 void ForEachPluginOption(const PluginModule& module, Visit&& visit) {
     if (module.optionsV2 != nullptr) {
         const auto& provider = *module.optionsV2;
-        const uint32_t count = CallPluginOptionCountV2(provider, module.descriptor.name);
+        const uint32_t count = (std::min)(
+            CallPluginOptionCountV2(provider, module.descriptor.name),
+            kMaximumPluginOptions);
         for (uint32_t index = 0; index < count; ++index) {
             XScalPluginOptionV2 option{};
             if (CallPluginGetOptionV2(provider, index, &option, module.descriptor.name) &&
@@ -929,7 +938,9 @@ void ForEachPluginOption(const PluginModule& module, Visit&& visit) {
     }
     if (module.options == nullptr) return;
     const auto& provider = *module.options;
-    const uint32_t count = CallPluginOptionCount(provider, module.descriptor.name);
+    const uint32_t count = (std::min)(
+        CallPluginOptionCount(provider, module.descriptor.name),
+        kMaximumPluginOptions);
     for (uint32_t index = 0; index < count; ++index) {
         XScalPluginOption legacy{};
         if (!CallPluginGetOption(provider, index, &legacy, module.descriptor.name)) continue;
@@ -1134,6 +1145,13 @@ std::vector<std::wstring> ReadLoadOrder() {
         return names;
     }
     std::string_view text = contents;
+    // Notepad's "Unicode" encodings save UTF-16 with a byte order mark; read
+    // as UTF-8, every line would fail to convert.
+    if (text.starts_with("\xFF\xFE") || text.starts_with("\xFE\xFF")) {
+        DiagnosticLogImmediate(
+            "xScal plugins: loadorder.txt is saved as UTF-16 and is ignored; save it as UTF-8");
+        return names;
+    }
     if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
     while (!text.empty()) {
         const auto end = text.find('\n');

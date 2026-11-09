@@ -446,19 +446,31 @@ bool BridgeAttachmentService::ShouldProbe(
     return true;
 }
 
+void BridgeAttachmentService::ForgetRootAttachments(void* movieRoot) noexcept {
+    attachedCalls_.EraseIf(
+        [movieRoot](const AttachedBridgeCall& entry) {
+            return entry.movieRoot == movieRoot;
+        });
+    for (std::size_t index = 0; index < componentCount_; ++index) {
+        ForgetComponent(components_[index], movieRoot);
+    }
+    modstorage::GlobalService().ForgetMovie(movieRoot);
+}
+
 void BridgeAttachmentService::RememberRoot(void* movieRoot) noexcept {
     void* evicted{};
     if (!roots_.Insert(movieRoot, &evicted) || evicted == nullptr) {
         return;
     }
-    attachedCalls_.EraseIf(
-        [evicted](const AttachedBridgeCall& entry) {
-            return entry.movieRoot == evicted;
-        });
-    for (std::size_t index = 0; index < componentCount_; ++index) {
-        ForgetComponent(components_[index], evicted);
-    }
-    modstorage::GlobalService().ForgetMovie(evicted);
+    ForgetRootAttachments(evicted);
+}
+
+void BridgeAttachmentService::ForgetMovieRoot(void* movieRoot) noexcept {
+    // Blocks instead of try_to_lock: a skipped call would leave the dead root
+    // in roots_, and nothing else removes it before the address is reused.
+    std::scoped_lock lock{mutex_};
+    (void)roots_.Erase(movieRoot);
+    ForgetRootAttachments(movieRoot);
 }
 
 BridgeAttachmentResult BridgeAttachmentService::Attach(

@@ -317,6 +317,18 @@ struct CalendarValues final {
     const auto wholeMinutes = static_cast<std::int32_t>(minutes);
     result.minute = wholeMinutes +
         (minutes - static_cast<float>(wholeMinutes) >= 0.5F ? 1 : 0);
+    // Rounding the last half minute of an hour gives 60. Carry it into the
+    // hour. In hour 23 the carry would also change the day and possibly the
+    // month and year, which this reader cannot compute, so the minute stays
+    // at 59 until the game rolls the calendar over.
+    if (result.minute == 60) {
+        if (result.hour < 23) {
+            ++result.hour;
+            result.minute = 0;
+        } else {
+            result.minute = 59;
+        }
+    }
     date = result;
     hasDate = true;
     return true;

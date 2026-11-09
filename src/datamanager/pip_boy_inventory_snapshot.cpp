@@ -243,13 +243,16 @@ void CallReleaseGameArray(
              reinterpret_cast<const void*>(array.data),
              rows.data(),
              array.size * sizeof(GameDamageRow)));
+    // The release function may clear the array header, so the row count is
+    // taken before it runs.
+    const std::uint32_t rowCount = array.size;
     if (array.data != 0) {
         CallReleaseGameArray(runtime.releaseGameArray, array);
     }
     if (!read) {
         return false;
     }
-    for (std::uint32_t index = 0; index < array.size; ++index) {
+    for (std::uint32_t index = 0; index < rowCount; ++index) {
         const auto& row = rows[index];
         if (std::isfinite(row.value) && row.value != 0.0F) {
             damage.push_back({row.type, row.value, row.duration});
@@ -738,6 +741,9 @@ using IsFormTaggedForSearch = bool(__fastcall*)(void* tagList, void* form);
         if (form == 0 || entry.count == 0) {
             continue;
         }
+        // The list itself was read above under the read lock. An item whose
+        // own fields or getters fail is left out instead of failing the
+        // whole inventory.
         if (!ReadField(item, layout.itemFavoriteOffset, favoriteSlot) ||
             !ReadItemName(runtime, item, entry.name) ||
             !CallGetItemUnitWeight(runtime.getItemUnitWeight, item, entry.weight) ||
@@ -746,19 +752,21 @@ using IsFormTaggedForSearch = bool(__fastcall*)(void* tagList, void* form);
             !ReadItemKind(layout, form, entry.weapon, entry.armor) ||
             (entry.weapon &&
              !ReadWeaponStats(runtime, player, item, form, entry))) {
-            return false;
+            continue;
         }
         if (entry.weapon || entry.armor) {
+            bool rowsRead{};
             try {
-                if (!ReadDamageRows(
-                        runtime,
-                        item,
-                        entry.armor,
-                        entry.armor ? entry.resistances : entry.damage)) {
-                    return false;
-                }
+                rowsRead = ReadDamageRows(
+                    runtime,
+                    item,
+                    entry.armor,
+                    entry.armor ? entry.resistances : entry.damage);
             } catch (...) {
                 return false;
+            }
+            if (!rowsRead) {
+                continue;
             }
         }
         // The class fields are optional: an item whose keywords cannot be

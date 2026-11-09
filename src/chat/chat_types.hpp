@@ -8,6 +8,16 @@
 namespace sf::chat {
 
 inline constexpr std::size_t kMaximumRelayMessageBytes = 8'192;
+// Events requested per subscribe batch. ZFE 0.12.15 sends the same value.
+inline constexpr std::uint32_t kSubscribeBatchEvents = 64;
+// One subscriber frame can carry kSubscribeBatchEvents events, which does not
+// fit in kMaximumRelayMessageBytes. The body is the only event field with a
+// known limit: 512 characters, at most 3072 bytes when every character is a
+// control character written as a six-byte JSON escape. Other characters are
+// taken to arrive as UTF-8, at most 4 bytes each. 4096 bytes per event leaves
+// 1024 bytes for the other fields and member names.
+inline constexpr std::size_t kMaximumSubscriberMessageBytes =
+    kSubscribeBatchEvents * std::size_t{4'096};
 inline constexpr std::size_t kMaximumChatBodyCharacters = 512;
 inline constexpr std::size_t kMaximumClientVersionBytes = 64;
 inline constexpr std::size_t kMaximumQueuedEvents = 128;

@@ -54,6 +54,15 @@ constexpr TargetDefinition kGamePassTarget{
     return true;
 }
 
+// For constants that cannot be 0. Databases for builds without a verified
+// layout carry them as 0, the same as RequiredConstant fields below.
+[[nodiscard]] bool ReadNonzeroConstant(
+    const XScalAddressLibraryV1& addresses,
+    std::uint64_t id,
+    std::size_t& value) noexcept {
+    return ReadConstant(addresses, id, value) && value != 0;
+}
+
 // Each optional feature reader leaves its profile zeroed unless every ID it
 // needs is present. A zeroed profile makes that feature's Install() fail.
 void ReadStatsEffectsProfile(
@@ -81,7 +90,9 @@ void ReadStatsEffectsProfile(
         ReadConstant(addresses, XSCAL_CONSTANT_ACTIVE_EFFECT_ELAPSED_TIME_OFFSET, result.effectElapsedTimeOffset) &&
         ReadConstant(addresses, XSCAL_CONSTANT_ACTIVE_EFFECT_DURATION_OFFSET, result.effectDurationOffset) &&
         ReadConstant(addresses, XSCAL_CONSTANT_SPELL_FULL_NAME_OFFSET, result.spellFullNameOffset) &&
-        ReadConstant(addresses, XSCAL_CONSTANT_GET_FULL_NAME_VTABLE_OFFSET, result.getFullNameVtableOffset);
+        // The Pip-Boy SPECIAL and perks profiles read this ID as a
+        // RequiredConstant; slot 0 would call a different virtual function.
+        ReadNonzeroConstant(addresses, XSCAL_CONSTANT_GET_FULL_NAME_VTABLE_OFFSET, result.getFullNameVtableOffset);
     if (complete) {
         effects = result;
     }
@@ -98,7 +109,9 @@ void ReadEnemyMeterProfile(
         ReadRva(addresses, XSCAL_ADDRESS_RESOLVE_OBJECT_HANDLE, result.resolveObjectHandle) &&
         ReadRva(addresses, XSCAL_ADDRESS_VATS_COLLECT_RESISTANCES, result.vatsCollectResistances) &&
         ReadConstant(addresses, XSCAL_CONSTANT_TARGET_EVENT_SOURCE_SINKS_OFFSET, result.targetEventSourceSinksOffset) &&
-        ReadConstant(addresses, XSCAL_CONSTANT_TARGET_MODEL_HANDLE_OFFSET, result.targetModelHandleOffset);
+        // Offset 0 of the target model holds the vtable that the enemy meter
+        // compares against targetModelVtable, so the handle cannot be there.
+        ReadNonzeroConstant(addresses, XSCAL_CONSTANT_TARGET_MODEL_HANDLE_OFFSET, result.targetModelHandleOffset);
     if (complete) {
         enemy = result;
     }
@@ -112,8 +125,11 @@ void ReadTimeDataProfile(
     const bool complete =
         ReadRva(addresses, XSCAL_ADDRESS_CALENDAR_SINGLETON_GLOBAL, result.calendarSingletonGlobal) &&
         ReadRva(addresses, XSCAL_ADDRESS_TES_GLOBAL_VTABLE, result.tesGlobalVtable) &&
-        ReadConstant(addresses, XSCAL_CONSTANT_CALENDAR_GAME_HOUR_OFFSET, result.calendarGameHourOffset) &&
-        ReadConstant(addresses, XSCAL_CONSTANT_TES_GLOBAL_VALUE_OFFSET, result.tesGlobalValueOffset);
+        // The Pip-Boy status profile reads the hour offset as a RequiredConstant.
+        // Offset 0 of a TESGlobal holds the vtable compared against
+        // tesGlobalVtable, so the value cannot be there.
+        ReadNonzeroConstant(addresses, XSCAL_CONSTANT_CALENDAR_GAME_HOUR_OFFSET, result.calendarGameHourOffset) &&
+        ReadNonzeroConstant(addresses, XSCAL_CONSTANT_TES_GLOBAL_VALUE_OFFSET, result.tesGlobalValueOffset);
     if (complete) {
         time = result;
     }

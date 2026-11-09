@@ -84,6 +84,8 @@ template <typename T>
     return true;
 }
 
+// The only caller reads the collectible's display name, so a null result is
+// read as an empty name.
 [[nodiscard]] bool CallGetFixedStringText(
     std::uintptr_t function,
     std::uintptr_t fixedString,
@@ -95,13 +97,17 @@ template <typename T>
         text = nullptr;
         return false;
     }
-    return text != nullptr;
+    if (text == nullptr) {
+        text = "";
+    }
+    return true;
 }
 
 enum class CollectibleReadResult {
     Read,
     // Not a collectible form, or a gated category while the gate is closed.
     Skipped,
+    // A field or game call of this form failed. The form is left out.
     Failed,
 };
 
@@ -289,15 +295,16 @@ bool ReadPipBoyCollectibles(
         if (form == 0) {
             continue;
         }
+        // The form array was read above, so a failure in one form's fields
+        // leaves out only that collectible.
         PipBoyCollectible collectible;
         switch (ReadCollectible(runtime, player, form, gateOpen, collectible)) {
             case CollectibleReadResult::Read:
                 result.push_back(std::move(collectible));
                 break;
             case CollectibleReadResult::Skipped:
-                break;
             case CollectibleReadResult::Failed:
-                return false;
+                break;
         }
     }
 
