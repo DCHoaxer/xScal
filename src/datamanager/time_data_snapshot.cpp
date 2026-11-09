@@ -14,10 +14,15 @@ constexpr float kMinutesPerHour = 60.0F;
 constexpr std::uint32_t kMinutesPerDay = 24U * 60U;
 constexpr std::size_t kMaximumTimeDataJsonBytes = 64;
 
+// Offset 0 is not a valid value for either constant: +0 of the TESGlobal is
+// its vtable, which ReadNativeTimeData compares, and the status profile
+// rejects 0 for the same calendar hour constant.
 [[nodiscard]] bool HasCompleteNativeTimeDataProfile(
     const config::NativeTimeDataProfile& profile) noexcept {
     return profile.calendarSingletonGlobal != 0 &&
-        profile.tesGlobalVtable != 0;
+        profile.tesGlobalVtable != 0 &&
+        profile.calendarGameHourOffset != 0 &&
+        profile.tesGlobalValueOffset != 0;
 }
 
 }

@@ -111,6 +111,8 @@ template <typename T>
     return true;
 }
 
+// Both callers read display text (quest name, objective text), so a null
+// result is read as an empty string, as CallGetFixedStringCharacters does.
 [[nodiscard]] bool CallGetFixedStringText(
     std::uintptr_t function,
     std::uintptr_t fixedString,
@@ -122,7 +124,10 @@ template <typename T>
         text = nullptr;
         return false;
     }
-    return text != nullptr;
+    if (text == nullptr) {
+        text = "";
+    }
+    return true;
 }
 
 // Returns an empty string for a null BSFixedString.
@@ -210,6 +215,20 @@ struct HashMapView final {
     std::uint64_t capacity{};
 };
 
+[[nodiscard]] bool ReadHashMapGlobals(
+    std::uintptr_t entriesGlobal,
+    std::uintptr_t capacityGlobal,
+    HashMapView& view) noexcept {
+    return platform::TryCopyBytes(
+               reinterpret_cast<const void*>(entriesGlobal),
+               &view.entries,
+               sizeof(view.entries)) &&
+        platform::TryCopyBytes(
+            reinterpret_cast<const void*>(capacityGlobal),
+            &view.capacity,
+            sizeof(view.capacity));
+}
+
 // Reads an open-addressing map's entry array and capacity globals. A zero
 // capacity means the game has not allocated the map yet.
 [[nodiscard]] bool ReadHashMapView(
@@ -218,16 +237,24 @@ struct HashMapView final {
     std::size_t entrySize,
     HashMapView& view) noexcept {
     view = {};
+    if (entriesGlobal == 0) {
+        return false;
+    }
+    // The entry array and the capacity are separate globals, so a resize
+    // between the two copies would pair the new capacity with the old array.
+    // Both are read twice and must match; one retry covers a single resize.
     HashMapView result;
-    if (entriesGlobal == 0 ||
-        !platform::TryCopyBytes(
-            reinterpret_cast<const void*>(entriesGlobal),
-            &result.entries,
-            sizeof(result.entries)) ||
-        !platform::TryCopyBytes(
-            reinterpret_cast<const void*>(capacityGlobal),
-            &result.capacity,
-            sizeof(result.capacity))) {
+    bool consistent{};
+    for (int attempt = 0; attempt < 2 && !consistent; ++attempt) {
+        HashMapView check;
+        if (!ReadHashMapGlobals(entriesGlobal, capacityGlobal, result) ||
+            !ReadHashMapGlobals(entriesGlobal, capacityGlobal, check)) {
+            return false;
+        }
+        consistent = result.entries == check.entries &&
+            result.capacity == check.capacity;
+    }
+    if (!consistent) {
         return false;
     }
     if (result.capacity == 0) {
@@ -293,22 +320,28 @@ struct HashMapView final {
     return false;
 }
 
-[[nodiscard]] PipBoyQuest* FindOrAddQuest(
+// Returns false when the quest list cannot be built: the quest limit, the
+// quest state map or an allocation. A quest whose own fields cannot be read
+// returns true with questEntry null, so the caller skips its objective.
+[[nodiscard]] bool FindOrAddQuest(
     const ResolvedPipBoyQuestsRuntime& runtime,
     const HashMapView& questStates,
     std::vector<PipBoyQuest>& quests,
     const QuestObjectiveHandle& handle,
-    std::uintptr_t quest) noexcept {
+    std::uintptr_t quest,
+    PipBoyQuest*& questEntry) noexcept {
+    questEntry = nullptr;
     const auto questFormId = handle.questFormId;
     const auto found = std::find_if(
         quests.begin(), quests.end(), [questFormId](const PipBoyQuest& entry) {
             return entry.formId == questFormId;
         });
     if (found != quests.end()) {
-        return &*found;
+        questEntry = &*found;
+        return true;
     }
     if (quests.size() >= kMaximumQuests) {
-        return nullptr;
+        return false;
     }
 
     const auto& layout = runtime.layout;
@@ -330,11 +363,13 @@ struct HashMapView final {
         !platform::CopyBoundedCString(
             swfFile, kMaximumNameLength, true, entry.swfFile) ||
         !ReadField(quest, layout.questTypeOffset, entry.type) ||
-        !ReadField(quest, layout.questFlagsOffset, questFlags) ||
-        !ReadQuestStateFlags(
+        !ReadField(quest, layout.questFlagsOffset, questFlags)) {
+        return true;
+    }
+    if (!ReadQuestStateFlags(
             layout, questStates, questFormId, handle.context, hasState,
             stateFlags)) {
-        return nullptr;
+        return false;
     }
     entry.canBeRejected = (questFlags & kCanBeRejectedQuestFlag) != 0;
     entry.active = hasState && (stateFlags & kQuestStateActiveFlag) != 0;
@@ -343,9 +378,10 @@ struct HashMapView final {
     try {
         quests.push_back(std::move(entry));
     } catch (...) {
-        return nullptr;
+        return false;
     }
-    return &quests.back();
+    questEntry = &quests.back();
+    return true;
 }
 
 }
@@ -492,49 +528,58 @@ bool ReadPipBoyQuests(
         }
 
         QuestObjectiveHandle handle;
+        if (!platform::TryCopyBytes(
+                reinterpret_cast<const void*>(entry), &handle, kHandleBytes)) {
+            return false;
+        }
+        // The entry array was read above. From here on a failure belongs to
+        // one quest or objective, which is left out of the list.
         std::uintptr_t quest{};
         std::uintptr_t objective{};
-        if (!platform::TryCopyBytes(
-                reinterpret_cast<const void*>(entry), &handle, kHandleBytes) ||
-            !CallGetQuestFromHandle(runtime.getQuestFromHandle, handle, quest) ||
+        if (!CallGetQuestFromHandle(runtime.getQuestFromHandle, handle, quest) ||
+            quest == 0 ||
             !CallGetQuestObjectiveById(
                 runtime.getQuestObjectiveById,
                 quest,
                 handle.objectiveId,
-                objective)) {
-            return false;
-        }
-        // An objective state can outlive its quest form or objective.
-        if (quest == 0 || objective == 0) {
+                objective) ||
+            objective == 0) {
+            // An objective state can also outlive its quest form or
+            // objective.
             continue;
         }
 
         const bool completed = state == kCompletedState;
         bool hidden{};
         if (!IsHiddenOpenObjective(layout, quest, objective, hidden)) {
-            return false;
+            continue;
         }
         if (hidden && !completed) {
             continue;
         }
 
+        if (++objectiveCount > kMaximumObjectives) {
+            return false;
+        }
         PipBoyQuestObjective objectiveEntry;
         std::uint32_t objectiveFlags{};
         objectiveEntry.index = handle.objectiveId;
         objectiveEntry.completed = completed;
         objectiveEntry.failed = state == kFailedState;
-        if (++objectiveCount > kMaximumObjectives ||
-            !ReadField(objective, layout.objectiveFlagsOffset, objectiveFlags) ||
+        if (!ReadField(objective, layout.objectiveFlagsOffset, objectiveFlags) ||
             !ReadObjectiveText(runtime, objective, handle, objectiveEntry.text)) {
-            return false;
+            continue;
         }
         objectiveEntry.orWithPrevious =
             (objectiveFlags & kOrWithPreviousObjectiveFlag) != 0;
 
-        auto* const questEntry =
-            FindOrAddQuest(runtime, questStates, result, handle, quest);
-        if (questEntry == nullptr) {
+        PipBoyQuest* questEntry{};
+        if (!FindOrAddQuest(
+                runtime, questStates, result, handle, quest, questEntry)) {
             return false;
+        }
+        if (questEntry == nullptr) {
+            continue;
         }
         try {
             questEntry->objectives.push_back(std::move(objectiveEntry));

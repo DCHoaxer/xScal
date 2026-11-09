@@ -17,6 +17,11 @@ namespace {
 
 constexpr std::size_t kMaximumResultBytes = 40 * 1024;
 constexpr std::size_t kMaximumPendingOperations = 16;
+constexpr std::string_view kPollResultPrefix = "{\"success\":true,\"events\":[";
+constexpr std::string_view kPollResultSuffix = "]}";
+// Largest serialized event that PollEvents can return on its own.
+constexpr std::size_t kMaximumEventBytes =
+    kMaximumResultBytes - kPollResultPrefix.size() - kPollResultSuffix.size();
 
 [[nodiscard]] bool AddString(
     std::string_view text,
@@ -681,6 +686,11 @@ bool ChatSession::AcceptAuthentication(
             permissions_ = PermissionsForRole(role_);
             authState_ = AuthState::Authenticated;
             connected_ = true;
+            // A registration creates a new identity. The cursor was read by the
+            // previous identity's subscription.
+            if (registered) {
+                relayCursor_ = 0;
+            }
             // Publish the authentication event before another thread can
             // observe connected_ and enqueue an operation completion.
             PushEvent(ChatEvent{
@@ -692,8 +702,11 @@ bool ChatSession::AcceptAuthentication(
                 std::string{userId},
                 std::string{token},
                 std::string{createdAt}};
-            (void)authFile_->Save(credential);
+            const bool saved = authFile_->Save(credential);
             ClearAuthCredential(credential);
+            if (!saved) {
+                DiagnosticLog("xScal chat: could not save chat-auth.bin");
+            }
         }
         return true;
     } catch (...) {
@@ -744,13 +757,12 @@ void ChatSession::RunSubscriber(
             subscriber_.active = true;
             subscriber_.lastError.clear();
             subscriber_.nextReconnectDelayMs = 0;
-            delayIndex = 0;
         }
         bool subscriptionRejected{};
         while (result.Succeeded() &&
                !connectionStop_.load(std::memory_order_acquire)) {
             result = subscriberConnection_.ReceiveText(
-                kMaximumRelayMessageBytes, connectionStop_);
+                kMaximumSubscriberMessageBytes, connectionStop_);
             if (!result.Succeeded()) {
                 break;
             }
@@ -773,6 +785,10 @@ void ChatSession::RunSubscriber(
                 ++subscriber_.messagesReceived;
                 relayCursor_ = (std::max)(relayCursor_, reply.cursor);
             }
+            // Reset the backoff only after a parsed reply. A relay that accepts
+            // the subscribe request and then closes the socket is otherwise
+            // retried every 250 ms.
+            delayIndex = 0;
             for (auto& event : reply.events) {
                 PushEvent(std::move(event));
             }
@@ -996,7 +1012,10 @@ void ChatSession::PushEvent(ChatEvent event) noexcept {
     std::scoped_lock lock{eventMutex_};
     event.id = ++nextEventId_;
     std::string serialized;
-    if (!AppendEvent(event, serialized)) {
+    // An event larger than kMaximumEventBytes never fits in a PollEvents
+    // result, and the caller's cursor would stop in front of it.
+    if (!AppendEvent(event, serialized) ||
+        serialized.size() > kMaximumEventBytes) {
         ++pendingDroppedEvents_;
         droppedEvents_.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -1072,8 +1091,7 @@ std::string ChatSession::PollEvents(
         }
     };
     std::string output;
-    if (!AppendLiteral(
-            "{\"success\":true,\"events\":[", kMaximumResultBytes, output)) {
+    if (!AppendLiteral(kPollResultPrefix, kMaximumResultBytes, output)) {
         restoreDroppedNotice();
         return ErrorResult("allocation_failure", "Could not construct events");
     }
@@ -1081,8 +1099,8 @@ std::string ChatSession::PollEvents(
     for (; emitted < selectedCount; ++emitted) {
         const std::string& json = *selected[emitted].json;
         const std::size_t separatorBytes = emitted == 0 ? 0 : 1;
-        // Reserve two bytes for the closing "]}".
-        if (json.size() + separatorBytes + 2 > kMaximumResultBytes - output.size()) {
+        if (json.size() + separatorBytes + kPollResultSuffix.size() >
+            kMaximumResultBytes - output.size()) {
             break;
         }
         if ((emitted != 0 &&
@@ -1092,7 +1110,7 @@ std::string ChatSession::PollEvents(
             return ErrorResult("allocation_failure", "Could not construct events");
         }
     }
-    if (!AppendLiteral("]}", kMaximumResultBytes, output)) {
+    if (!AppendLiteral(kPollResultSuffix, kMaximumResultBytes, output)) {
         restoreDroppedNotice();
         return ErrorResult("allocation_failure", "Could not construct events");
     }

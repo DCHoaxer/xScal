@@ -10,6 +10,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace sf {
 
@@ -78,6 +79,10 @@ public:
     // Returns true while a write to relativePath is queued or executing.
     [[nodiscard]] bool IsWriteQueued(std::wstring_view relativePath) noexcept;
 
+    // Returns true when the most recent write to relativePath failed. A later
+    // write to the same path that succeeds clears it.
+    [[nodiscard]] bool HasFailedWrite(std::wstring_view relativePath) noexcept;
+
 private:
     enum class State : std::uint8_t {
         Stopped,
@@ -106,7 +111,9 @@ private:
         bool append,
         std::string_view payload) noexcept;
     void WorkerMain() noexcept;
-    void Execute(const Job& job) noexcept;
+    [[nodiscard]] bool Execute(const Job& job) noexcept;
+    // Call with mutex_ held.
+    void RecordWriteResult(const Job& job, bool written) noexcept;
 
     std::mutex lifecycleMutex_;
     std::mutex mutex_;
@@ -115,6 +122,8 @@ private:
     std::deque<Job> jobs_;
     // The job WorkerMain is executing, or nullptr. Set and cleared under mutex_.
     const Job* activeJob_{};
+    // Paths whose most recent write failed. Read and written under mutex_.
+    std::vector<std::wstring> failedWrites_;
     std::array<DiagnosticLine, kMaximumQueuedDiagnosticLines>
         diagnosticLines_{};
     std::size_t queuedPayloadBytes_{};

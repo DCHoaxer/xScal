@@ -18,6 +18,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sf::plugins {
@@ -910,13 +911,22 @@ void AppendNumber(double value, std::string& output) {
         output += '0';
 }
 
+// Each option listed by xsGetPluginOptions takes more than 40 bytes of the
+// result string, so one result never holds more options than this. Options
+// at higher indexes are not read: they are read on the game thread, and an
+// unbounded count from a plugin could stall it for billions of calls.
+constexpr uint32_t kMaximumPluginOptions =
+    XSCAL_SCALEFORM_MAX_RESULT_STRING_BYTES / 40u;
+
 // Reads every option of a module as a version 2 option. Version 1 options
 // become toggles.
 template<class Visit>
 void ForEachPluginOption(const PluginModule& module, Visit&& visit) {
     if (module.optionsV2 != nullptr) {
         const auto& provider = *module.optionsV2;
-        const uint32_t count = CallPluginOptionCountV2(provider, module.descriptor.name);
+        const uint32_t count = (std::min)(
+            CallPluginOptionCountV2(provider, module.descriptor.name),
+            kMaximumPluginOptions);
         for (uint32_t index = 0; index < count; ++index) {
             XScalPluginOptionV2 option{};
             if (CallPluginGetOptionV2(provider, index, &option, module.descriptor.name) &&
@@ -928,7 +938,9 @@ void ForEachPluginOption(const PluginModule& module, Visit&& visit) {
     }
     if (module.options == nullptr) return;
     const auto& provider = *module.options;
-    const uint32_t count = CallPluginOptionCount(provider, module.descriptor.name);
+    const uint32_t count = (std::min)(
+        CallPluginOptionCount(provider, module.descriptor.name),
+        kMaximumPluginOptions);
     for (uint32_t index = 0; index < count; ++index) {
         XScalPluginOption legacy{};
         if (!CallPluginGetOption(provider, index, &legacy, module.descriptor.name)) continue;
@@ -1114,6 +1126,60 @@ bool SetPluginOption(
     return true;
 }
 
+constexpr std::size_t kMaximumLoadOrderSize = 64 * 1024;
+
+// DLL file names from Data\XSCAL\Plugins\loadorder.txt in file order. Blank
+// lines and lines starting with '#' are skipped. A missing file returns an
+// empty list, which keeps the alphabetical order.
+std::vector<std::wstring> ReadLoadOrder() {
+    std::vector<std::wstring> names;
+    platform::ExecutableRelativePath path;
+    if (!platform::ResolveExecutableRelativePath(
+            L"Data\\XSCAL\\Plugins\\loadorder.txt", path)) return names;
+    const auto presence = platform::QueryFilePresence(path);
+    if (presence == platform::FilePresence::Missing) return names;
+    std::string contents;
+    if (presence == platform::FilePresence::Error ||
+        !platform::ReadBoundedFile(path, kMaximumLoadOrderSize, contents)) {
+        DiagnosticLogImmediate("xScal plugins: could not read loadorder.txt");
+        return names;
+    }
+    std::string_view text = contents;
+    // Notepad's "Unicode" encodings save UTF-16 with a byte order mark; read
+    // as UTF-8, every line would fail to convert.
+    if (text.starts_with("\xFF\xFE") || text.starts_with("\xFE\xFF")) {
+        DiagnosticLogImmediate(
+            "xScal plugins: loadorder.txt is saved as UTF-16 and is ignored; save it as UTF-8");
+        return names;
+    }
+    if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
+    while (!text.empty()) {
+        const auto end = text.find('\n');
+        std::string_view line = text.substr(0, end);
+        text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+        while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+            line.remove_prefix(1);
+        while (!line.empty() &&
+               (line.back() == ' ' || line.back() == '\t' || line.back() == '\r'))
+            line.remove_suffix(1);
+        if (line.empty() || line.front() == '#') continue;
+        const int lineLength = static_cast<int>(line.size());
+        const int length = ::MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, line.data(), lineLength, nullptr, 0);
+        if (length <= 0) {
+            DiagnosticLogFormatImmediate(
+                "xScal plugins: loadorder.txt line '%.*s' is not valid UTF-8",
+                lineLength, line.data());
+            continue;
+        }
+        std::wstring name(static_cast<std::size_t>(length), L'\0');
+        (void)::MultiByteToWideChar(
+            CP_UTF8, MB_ERR_INVALID_CHARS, line.data(), lineLength, name.data(), length);
+        names.push_back(std::move(name));
+    }
+    return names;
+}
+
 BOOL CALLBACK LoadModules(PINIT_ONCE, PVOID, PVOID*) noexcept {
     ClearDiagnosticLog();
     address::v3::ApplyCachedRevocations();
@@ -1151,7 +1217,31 @@ BOOL CALLBACK LoadModules(PINIT_ONCE, PVOID, PVOID*) noexcept {
                 DiagnosticLogFormatImmediate(
                     "xScal plugin scan failed (%lu)", error);
         }
-        std::sort(paths.begin(), paths.end());
+        const std::vector<std::wstring> loadOrder = ReadLoadOrder();
+        if (!loadOrder.empty())
+            DiagnosticLogFormatImmediate(
+                "xScal plugins: loadorder.txt lists %zu plugins", loadOrder.size());
+        const auto isNamed = [&](const std::wstring& pluginPath, const std::wstring& name) {
+            return _wcsicmp(pluginPath.c_str() + directory.size(), name.c_str()) == 0;
+        };
+        // The rank is the line position in loadorder.txt. Unlisted plugins rank
+        // after every listed one and keep the alphabetical order among themselves.
+        const auto rank = [&](const std::wstring& pluginPath) {
+            for (std::size_t index = 0; index < loadOrder.size(); ++index)
+                if (isNamed(pluginPath, loadOrder[index])) return index;
+            return loadOrder.size();
+        };
+        std::sort(paths.begin(), paths.end(), [&](const auto& left, const auto& right) {
+            const auto leftRank = rank(left);
+            const auto rightRank = rank(right);
+            return leftRank != rightRank ? leftRank < rightRank : left < right;
+        });
+        for (const auto& name : loadOrder) {
+            if (std::none_of(paths.begin(), paths.end(),
+                    [&](const auto& pluginPath) { return isNamed(pluginPath, name); }))
+                DiagnosticLogFormatImmediate(
+                    "xScal plugins: loadorder.txt entry '%ls' is not installed", name.c_str());
+        }
         for (const auto& path : paths) LoadModule(path);
     } catch (...) {
         if (search != INVALID_HANDLE_VALUE) (void)::FindClose(search);

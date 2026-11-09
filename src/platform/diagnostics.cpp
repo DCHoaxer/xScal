@@ -113,18 +113,12 @@ void ClearDiagnosticLog() noexcept {
 
 namespace {
 
-void AppendDiagnosticLineToFile(
-    std::string_view line,
-    bool waitForLock) noexcept {
+void AppendDiagnosticLineToFile(std::string_view line) noexcept {
     if (line.empty() || diagnosticPath[0] == L'\0') {
         return;
     }
 
-    if (waitForLock) {
-        ::AcquireSRWLockExclusive(&diagnosticLock);
-    } else if (::TryAcquireSRWLockExclusive(&diagnosticLock) == FALSE) {
-        return;
-    }
+    ::AcquireSRWLockExclusive(&diagnosticLock);
     HANDLE file = ::CreateFileW(
         diagnosticPath.data(),
         FILE_APPEND_DATA,
@@ -148,8 +142,12 @@ void AppendDiagnosticLineToFile(
 
 }
 
+// Called on the FileCommandService worker thread, which holds no other lock
+// here. It waits for the log lock because the line has already been removed
+// from the queue; a game thread writing an immediate line holds the lock only
+// for one open, write and close.
 void WriteDiagnosticLineToFile(std::string_view line) noexcept {
-    AppendDiagnosticLineToFile(line, false);
+    AppendDiagnosticLineToFile(line);
 }
 
 namespace {
@@ -197,7 +195,7 @@ void WriteDiagnosticMessage(const char* message, bool immediate) noexcept {
             return;
         }
     }
-    AppendDiagnosticLineToFile(std::string_view{line, lineLength}, true);
+    AppendDiagnosticLineToFile(std::string_view{line, lineLength});
 }
 
 void WriteDiagnosticFormat(

@@ -304,9 +304,16 @@ std::uint32_t archiveRead(
     void* streamPointer, void* buffer, std::uint64_t length, std::uint64_t* bytesRead) noexcept
 {
     const auto stream = reinterpret_cast<std::uintptr_t>(streamPointer);
-    if (bytesRead != nullptr && isBufferedCall(stream)) {
-        if (Entry* const entry = entryForCall(stream)) {
-            *bytesRead = advance(entry, buffer, length);
+    if (isBufferedCall(stream)) {
+        // A call without bytesRead does not start an entry, but a stream that
+        // already has one is served from it: the game's zlib state on that
+        // stream was cleared by attachEntry.
+        Entry* const entry =
+            bytesRead != nullptr ? entryForCall(stream) : findEntry(stream);
+        if (entry != nullptr) {
+            const std::uint32_t count = advance(entry, buffer, length);
+            if (bytesRead != nullptr)
+                *bytesRead = count;
             bufferedReads.fetch_add(1, std::memory_order_relaxed);
             return 0;
         }
@@ -318,17 +325,20 @@ std::uint32_t archiveSeek(
     void* streamPointer, std::int64_t offset, std::uint32_t whence, std::uint64_t* newPosition) noexcept
 {
     const auto stream = reinterpret_cast<std::uintptr_t>(streamPointer);
-    if (newPosition == nullptr || !isBufferedCall(stream))
+    if (!isBufferedCall(stream))
         return gameSeek(streamPointer, offset, whence, newPosition);
+    // Like archiveRead, a call without newPosition starts no entry but uses
+    // an existing one.
     Entry* entry = findEntry(stream);
-    if (entry == nullptr && whence == kSeekCurrent && offset >= 0)
+    if (entry == nullptr && newPosition != nullptr && whence == kSeekCurrent && offset >= 0)
         entry = entryForCall(stream);
     if (entry == nullptr)
         return gameSeek(streamPointer, offset, whence, newPosition);
     if (whence != kSeekCurrent || offset < 0)
         return unsupportedResult();
     (void)advance(entry, nullptr, static_cast<std::uint64_t>(offset));
-    *newPosition = entry->position;
+    if (newPosition != nullptr)
+        *newPosition = entry->position;
     return 0;
 }
 

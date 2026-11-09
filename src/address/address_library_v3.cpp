@@ -806,10 +806,16 @@ BOOL CALLBACK LoadRevocationsOnce(PINIT_ONCE, PVOID, PVOID*) noexcept {
         wide.data(), length) == length;
 }
 
+// Compares field by field. EncodeXScalVersion puts patch in the high byte, so
+// comparing encoded values would order 0.4.35 after 0.5.0.
 [[nodiscard]] int CompareVersion(format::XScalVersion left, format::XScalVersion right) noexcept {
-    const std::uint32_t a = format::EncodeXScalVersion(left);
-    const std::uint32_t b = format::EncodeXScalVersion(right);
-    return a < b ? -1 : (a > b ? 1 : 0);
+    if (format::IsVersionNewer(left, right)) {
+        return 1;
+    }
+    if (format::IsVersionNewer(right, left)) {
+        return -1;
+    }
+    return 0;
 }
 
 }  // namespace

@@ -3,6 +3,9 @@
 #include "platform/diagnostics.hpp"
 #include "platform/win32_file.hpp"
 
+#include <Windows.h>
+
+#include <algorithm>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -105,36 +108,60 @@ static_assert(
         return false;
     }
 
-    try {
-        std::string combined;
-        const auto presence = platform::QueryFilePresence(targetPath);
-        if (presence == platform::FilePresence::Error) {
-            return false;
-        }
-        if (presence == platform::FilePresence::Present &&
-            !platform::ReadBoundedFile(
-                targetPath,
-                (std::numeric_limits<std::size_t>::max)(),
-                combined)) {
-            return false;
-        }
-        if (data.size() > combined.max_size() - combined.size()) {
-            return false;
-        }
-        combined.append(data);
-
-        if (!platform::WriteFileAtomically(targetPath, combined)) {
+    const auto presence = platform::QueryFilePresence(targetPath);
+    if (presence == platform::FilePresence::Error) {
+        return false;
+    }
+    // WriteFileAtomically creates the missing parent directories.
+    if (presence == platform::FilePresence::Missing) {
+        if (!platform::WriteFileAtomically(targetPath, data)) {
             return false;
         }
         DiagnosticLogFormat(
-            "Scaleform append %s: completed (added=%zu, total=%zu)",
+            "Scaleform append %s: completed (added=%zu)",
             callbackName,
-            data.size(),
-            combined.size());
+            data.size());
         return true;
-    } catch (...) {
+    }
+
+    // The existing file is not read: append logs such as vendorlog.txt grow
+    // without limit, and rewriting them would copy the whole file each time.
+    const HANDLE file = ::CreateFileW(
+        targetPath.c_str(),
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
         return false;
     }
+    std::size_t offset{};
+    while (offset < data.size()) {
+        const DWORD request = static_cast<DWORD>((std::min)(
+            data.size() - offset,
+            static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
+        DWORD written{};
+        if (::WriteFile(file, data.data() + offset, request, &written, nullptr) ==
+                FALSE ||
+            written == 0) {
+            break;
+        }
+        offset += written;
+    }
+    const bool complete = offset == data.size();
+    const DWORD error = ::GetLastError();
+    (void)::CloseHandle(file);
+    if (!complete) {
+        ::SetLastError(error);
+        return false;
+    }
+    DiagnosticLogFormat(
+        "Scaleform append %s: completed (added=%zu)",
+        callbackName,
+        data.size());
+    return true;
 }
 
 }  // namespace
@@ -300,6 +327,14 @@ bool FileCommandService::IsWriteQueued(
     return false;
 }
 
+bool FileCommandService::HasFailedWrite(
+    std::wstring_view relativePath) noexcept {
+    std::scoped_lock lock{mutex_};
+    return std::find(
+               failedWrites_.begin(), failedWrites_.end(), relativePath) !=
+        failedWrites_.end();
+}
+
 void FileCommandService::WorkerMain() noexcept {
     for (;;) {
         Job job;
@@ -332,8 +367,9 @@ void FileCommandService::WorkerMain() noexcept {
             workActive_ = true;
         }
 
+        bool written{};
         if (executeFileCommand) {
-            Execute(job);
+            written = Execute(job);
         } else {
             WriteDiagnosticLineToFile(std::string_view{
                 diagnosticLine.bytes.data(),
@@ -342,6 +378,11 @@ void FileCommandService::WorkerMain() noexcept {
 
         {
             std::scoped_lock lock{mutex_};
+            // Recorded in the same lock as clearing activeJob_, so a caller
+            // that sees the write finished also sees whether it failed.
+            if (executeFileCommand) {
+                RecordWriteResult(job, written);
+            }
             workActive_ = false;
             activeJob_ = nullptr;
             if (jobs_.empty() && diagnosticLineCount_ == 0) {
@@ -357,13 +398,38 @@ void FileCommandService::WorkerMain() noexcept {
     idle_.notify_all();
 }
 
-void FileCommandService::Execute(const Job& job) noexcept {
-    if (job.append) {
-        (void)AppendRelativeFile(
-            job.label, job.relativePath.c_str(), job.payload);
-    } else {
-        (void)WriteRelativeFile(
-            job.label, job.relativePath.c_str(), job.payload);
+bool FileCommandService::Execute(const Job& job) noexcept {
+    const bool written = job.append
+        ? AppendRelativeFile(job.label, job.relativePath.c_str(), job.payload)
+        : WriteRelativeFile(job.label, job.relativePath.c_str(), job.payload);
+    if (!written) {
+        DiagnosticLogFormat(
+            "Scaleform %s %s: could not write %ls (%lu)",
+            job.append ? "append" : "write",
+            job.label,
+            job.relativePath.c_str(),
+            ::GetLastError());
+    }
+    return written;
+}
+
+void FileCommandService::RecordWriteResult(
+    const Job& job,
+    bool written) noexcept {
+    const auto found = std::find(
+        failedWrites_.begin(), failedWrites_.end(), job.relativePath);
+    if (written) {
+        if (found != failedWrites_.end()) {
+            failedWrites_.erase(found);
+        }
+        return;
+    }
+    if (found != failedWrites_.end()) {
+        return;
+    }
+    try {
+        failedWrites_.push_back(job.relativePath);
+    } catch (...) {
     }
 }
 

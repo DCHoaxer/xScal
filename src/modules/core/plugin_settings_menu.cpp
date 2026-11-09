@@ -146,13 +146,25 @@ private:
         (void)context.set("allowCodeImport", true);
         // The window extends the game's MenuComponent and uses the game's row classes, so it needs
         // the game's domain.
-        if (!context.set("applicationDomain", domain) ||
-            !loader.call("loadBytes", bytes, context).valid() ||
-            !root.call("addChild", loader).valid()) {
+        if (!context.set("applicationDomain", domain)) {
             return false;
         }
+        // loadBytes runs last: a loader that started loading is never left behind when a later step
+        // fails, because onFrame would then create another one on the next attempt.
         loaderRef_ = movie.retain(std::move(loader));
         if (!loaderRef_) {
+            return false;
+        }
+        xscal::Value retained = movie.load(loaderRef_);
+        if (!root.call("addChild", retained).valid()) {
+            movie.drop(loaderRef_);
+            loaderRef_ = {};
+            return false;
+        }
+        if (!retained.call("loadBytes", bytes, context).valid()) {
+            (void)root.call("removeChild", retained);
+            movie.drop(loaderRef_);
+            loaderRef_ = {};
             return false;
         }
         loadStarted_ = true;

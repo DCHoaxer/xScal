@@ -160,7 +160,15 @@ RelayResult RelayConnection::Open(
     if (session == nullptr) {
         return Result(RelayStatus::ConnectFailed, ::GetLastError());
     }
-    session_.store(session, std::memory_order_release);
+    // Interrupt sets the stop flag and then exchanges every slot. Publishing a
+    // handle with exchange orders it against Interrupt's exchange: either
+    // Interrupt closes the handle, or the stop check after the exchange sees
+    // the flag. A plain store allows both to miss.
+    (void)session_.exchange(session, std::memory_order_acq_rel);
+    if (stopRequested.load(std::memory_order_acquire)) {
+        Close();
+        return Result(RelayStatus::Stopped);
+    }
     if (::WinHttpSetTimeouts(
             session,
             kConnectTimeoutMs,
@@ -182,7 +190,7 @@ RelayResult RelayConnection::Open(
         Close();
         return Result(RelayStatus::ConnectFailed, error);
     }
-    connection_.store(connection, std::memory_order_release);
+    (void)connection_.exchange(connection, std::memory_order_acq_rel);
     if (stopRequested.load(std::memory_order_acquire)) {
         Close();
         return Result(RelayStatus::Stopped);
@@ -201,7 +209,11 @@ RelayResult RelayConnection::Open(
         Close();
         return Result(RelayStatus::ConnectFailed, error);
     }
-    request_.store(request, std::memory_order_release);
+    (void)request_.exchange(request, std::memory_order_acq_rel);
+    if (stopRequested.load(std::memory_order_acquire)) {
+        Close();
+        return Result(RelayStatus::Stopped);
+    }
     if (::WinHttpSetOption(
             request,
             WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET,
@@ -242,7 +254,7 @@ RelayResult RelayConnection::Open(
         Close();
         return Result(RelayStatus::ConnectFailed, error);
     }
-    socket_.store(socket, std::memory_order_release);
+    (void)socket_.exchange(socket, std::memory_order_acq_rel);
     CloseHandle(request_);
     if (stopRequested.load(std::memory_order_acquire)) {
         Close();

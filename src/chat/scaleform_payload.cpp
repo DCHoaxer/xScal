@@ -62,9 +62,10 @@ template <typename Type>
         if (type != layout::kBooleanType) {
             return false;
         }
+        // The boolean is one byte; the bytes above it are not cleared.
         *read.booleanValue =
-            ReadStoredValue<std::uint64_t>(
-                value, layout::kValueInternalTwoOffset) != 0;
+            (ReadStoredValue<std::uint64_t>(
+                value, layout::kValueInternalTwoOffset) & 0xFF) != 0;
         return true;
     }
     if (type == layout::kIntType) {

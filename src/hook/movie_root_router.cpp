@@ -106,6 +106,8 @@ thread_local bool insideMovieRootHook = false;
 
 struct MovieRootValidationCache final {
     std::uint64_t routeGeneration{};
+    // MovieRootRouteState::destroyedMovieRoots_ when the entry was filled.
+    std::uint64_t destroyedMovieRoots{};
     const void* movieRoot{};
     const void* expectedVtable{};
     modules::CoreModule coreModule{};
@@ -183,9 +185,14 @@ public:
 
 // Checks movieRoot against the expected vtable. A cached entry skips the
 // VirtualQuery call but still reads the vtable on every check.
+// destroyedMovieRoots is the route's destroy count. An entry filled before a
+// later destroy is dropped, because the destroyed MovieRoot's address can be
+// reused by a new MovieRoot that must start with a new CoreModule. The cache
+// is thread_local, so the destructor hook cannot erase the entry itself.
 [[nodiscard]] MovieRootValidation ValidateMovieRoot(
     const VtableHookPlatform& platform,
     std::uint64_t routeGeneration,
+    std::uint64_t destroyedMovieRoots,
     const void* movieRoot,
     const void* expectedVtable,
     MovieRootValidationCache*& acceptedEntry) noexcept {
@@ -194,7 +201,7 @@ public:
         return MovieRootValidation::Unreadable;
     }
 
-    const auto cachedEntry = std::find_if(
+    auto cachedEntry = std::find_if(
         validatedMovieRoots.begin(),
         validatedMovieRoots.end(),
         [routeGeneration, movieRoot, expectedVtable](
@@ -203,6 +210,11 @@ public:
                 entry.movieRoot == movieRoot &&
                 entry.expectedVtable == expectedVtable;
         });
+    if (cachedEntry != validatedMovieRoots.end() &&
+        cachedEntry->destroyedMovieRoots != destroyedMovieRoots) {
+        *cachedEntry = {};
+        cachedEntry = validatedMovieRoots.end();
+    }
     const bool cached = cachedEntry != validatedMovieRoots.end();
     if (!cached && !IsReadableMovieRoot(platform, movieRoot)) {
         return MovieRootValidation::Unreadable;
@@ -239,7 +251,8 @@ public:
             (nextMovieRootValidationCacheSlot + 1) %
             validatedMovieRoots.size();
     }
-    *destination = {routeGeneration, movieRoot, expectedVtable};
+    *destination = {
+        routeGeneration, destroyedMovieRoots, movieRoot, expectedVtable};
     acceptedEntry = &*destination;
     return MovieRootValidation::Expected;
 }
@@ -285,6 +298,11 @@ MovieRootRouteState::MovieRootRouteState(
           targetKind,
           scaleformConfig} {}
 
+void MovieRootRouteState::ForgetMovieRoot(void* movieRoot) noexcept {
+    attachments_.ForgetMovieRoot(movieRoot);
+    destroyedMovieRoots_.fetch_add(1, std::memory_order_release);
+}
+
 bool MovieRootRouteState::VisitMovieRoot(
     void* movieRoot,
     MovieRootVisitor visitor,
@@ -294,6 +312,7 @@ bool MovieRootRouteState::VisitMovieRoot(
         ValidateMovieRoot(
             platform_,
             validationGeneration_,
+            destroyedMovieRoots_.load(std::memory_order_acquire),
             movieRoot,
             expectedVtable_,
             validationEntry) != MovieRootValidation::Expected) {
@@ -320,11 +339,14 @@ bool MovieRootRouteState::VisitTrackedMovieRoots(
             preferredMovieRoot, candidates)) {
         return false;
     }
+    const auto destroyedMovieRoots =
+        destroyedMovieRoots_.load(std::memory_order_acquire);
     for (void* candidate : candidates) {
         MovieRootValidationCache* validationEntry{};
         if (ValidateMovieRoot(
                 platform_,
                 validationGeneration_,
+                destroyedMovieRoots,
                 candidate,
                 expectedVtable_,
                 validationEntry) != MovieRootValidation::Expected) {
@@ -358,6 +380,7 @@ bool MovieRootRouteState::Route(
     switch (ValidateMovieRoot(
         platform_,
         validationGeneration_,
+        destroyedMovieRoots_.load(std::memory_order_acquire),
         movieRoot,
         expectedVtable_,
         validationEntry)) {

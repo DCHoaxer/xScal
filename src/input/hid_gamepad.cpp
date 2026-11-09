@@ -662,8 +662,10 @@ private:
         gamepad->file = ::CreateFileW(
             path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+        // A failed open is not ignored, the same as a failed probe or read
+        // start: another process can hold the gamepad exclusively for a while,
+        // and a later scan opens it once that process lets go.
         if (gamepad->file == INVALID_HANDLE_VALUE) {
-            ignoredPaths_.push_back(std::move(path));
             return;
         }
         gamepad->path = std::move(path);

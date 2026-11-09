@@ -89,6 +89,9 @@ public:
     [[nodiscard]] bool CopyTrackedMovieRoots(
         void* preferredMovieRoot,
         TrackedMovieRoots& destinations) noexcept;
+    // Called by the MovieRoot destructor hook. A new MovieRoot can be
+    // allocated at the same address and must not count as attached.
+    void ForgetMovieRoot(void* movieRoot) noexcept;
 
 private:
     struct ProbeState final {
@@ -150,6 +153,8 @@ private:
         std::size_t& probeCount,
         void* movieRoot) noexcept;
     void RememberRoot(void* movieRoot) noexcept;
+    // Requires mutex_. Leaves roots_ unchanged.
+    void ForgetRootAttachments(void* movieRoot) noexcept;
     static void ForgetComponent(
         ComponentAttachments& componentState,
         void* movieRoot) noexcept;

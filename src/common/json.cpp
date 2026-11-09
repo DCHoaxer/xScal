@@ -1,11 +1,13 @@
 #include "common/json.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace sf::json {
 namespace {
@@ -87,15 +89,43 @@ private:
     return output.Append('"');
 }
 
-[[nodiscard]] bool KeysEqual(
-    yyjson_val* left,
-    yyjson_val* right) noexcept {
-    const auto leftLength = yyjson_get_len(left);
-    return leftLength == yyjson_get_len(right) &&
-        std::memcmp(
-            yyjson_get_str(left),
-            yyjson_get_str(right),
-            leftLength) == 0;
+// Sets position to the index of the first member whose key appears again later
+// in the object, or to the member count when every key is distinct. The keys
+// are sorted instead of compared pairwise: SplitFile runs this on the
+// downloaded addlib.json before its signature is checked, and a pairwise scan
+// of an object with tens of thousands of keys stalls startup. Returns false
+// when the key list cannot be allocated.
+[[nodiscard]] bool FindFirstDuplicateKey(
+    yyjson_val* object,
+    std::size_t& position) noexcept {
+    struct Key final {
+        std::string_view text;
+        std::size_t order{};
+    };
+    const std::size_t count = yyjson_obj_size(object);
+    position = count;
+    std::vector<Key> keys;
+    try {
+        keys.reserve(count);
+    } catch (...) {
+        return false;
+    }
+    yyjson_obj_iter iterator = yyjson_obj_iter_with(object);
+    yyjson_val* key{};
+    while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
+        keys.push_back({
+            std::string_view{yyjson_get_str(key), yyjson_get_len(key)},
+            keys.size()});
+    }
+    std::sort(keys.begin(), keys.end(), [](const Key& left, const Key& right) {
+        return left.text != right.text ? left.text < right.text : left.order < right.order;
+    });
+    for (std::size_t index = 1; index < keys.size(); ++index) {
+        if (keys[index].text == keys[index - 1].text) {
+            position = (std::min)(position, keys[index - 1].order);
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] bool ValidateValue(
@@ -127,20 +157,25 @@ private:
     }
 
     if (yyjson_is_obj(value)) {
+        std::size_t duplicatePosition = yyjson_obj_size(value);
+        if (options.rejectDuplicateMembers &&
+            !FindFirstDuplicateKey(value, duplicatePosition)) {
+            if (error != nullptr) {
+                error->code = ParseErrorCode::AllocationFailure;
+            }
+            return false;
+        }
+        // Stop at the first key that repeats later in the object, after the
+        // values of the members before it have been validated.
         yyjson_obj_iter iterator = yyjson_obj_iter_with(value);
         yyjson_val* key{};
+        std::size_t position{};
         while ((key = yyjson_obj_iter_next(&iterator)) != nullptr) {
-            if (options.rejectDuplicateMembers) {
-                yyjson_obj_iter later = iterator;
-                yyjson_val* laterKey{};
-                while ((laterKey = yyjson_obj_iter_next(&later)) != nullptr) {
-                    if (KeysEqual(key, laterKey)) {
-                        if (error != nullptr) {
-                            error->code = ParseErrorCode::DuplicateMember;
-                        }
-                        return false;
-                    }
+            if (position == duplicatePosition) {
+                if (error != nullptr) {
+                    error->code = ParseErrorCode::DuplicateMember;
                 }
+                return false;
             }
             if (!ValidateValue(
                     yyjson_obj_iter_get_val(key),
@@ -149,6 +184,7 @@ private:
                     error)) {
                 return false;
             }
+            ++position;
         }
         return true;
     }

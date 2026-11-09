@@ -48,9 +48,15 @@ public:
     void EraseIf(Predicate predicate) noexcept {
         auto destination = values_.begin();
         for (auto source = values_.begin(); source != end(); ++source) {
-            if (!predicate(*source)) {
-                *destination++ = std::move(*source);
+            if (predicate(*source)) {
+                continue;
             }
+            // Until the first erased value, source and destination are the
+            // same element, and moving a value onto itself can leave it empty.
+            if (destination != source) {
+                *destination = std::move(*source);
+            }
+            ++destination;
         }
         while (values_.begin() + size_ != destination) {
             values_[--size_] = {};
