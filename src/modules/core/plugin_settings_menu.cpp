@@ -126,6 +126,56 @@ private:
         framesWaitingForOwner_ = 0;
     }
 
+    // Every call into the movie costs a frame-time slice, and the SWF is thousands of bytes. Four
+    // bytes go in per writeInt call with big-endian order, which is the AS3 default. If the
+    // movie's ByteArray rejects a call or the first byte does not read back as written, the array
+    // is emptied and filled with one writeByte call per byte.
+    static bool writeSwfBytes(xscal::Value& bytes) {
+        if (writeSwfBytesAsInts(bytes)) {
+            return true;
+        }
+        if (!bytes.set("length", 0) || !bytes.set("position", 0)) {
+            return false;
+        }
+        for (const unsigned char byte : kSwfBytes) {
+            if (!bytes.call("writeByte", static_cast<int>(byte)).valid()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool writeSwfBytesAsInts(xscal::Value& bytes) {
+        if (!bytes.set("endian", "bigEndian")) {
+            return false;
+        }
+        constexpr std::size_t kSize = sizeof(kSwfBytes);
+        std::size_t offset = 0;
+        for (; offset + 4 <= kSize; offset += 4) {
+            const std::uint32_t word = (static_cast<std::uint32_t>(kSwfBytes[offset]) << 24) |
+                (static_cast<std::uint32_t>(kSwfBytes[offset + 1]) << 16) |
+                (static_cast<std::uint32_t>(kSwfBytes[offset + 2]) << 8) |
+                static_cast<std::uint32_t>(kSwfBytes[offset + 3]);
+            if (!bytes.call("writeInt", static_cast<std::int32_t>(word)).valid()) {
+                return false;
+            }
+        }
+        for (; offset < kSize; ++offset) {
+            if (!bytes.call("writeByte", static_cast<int>(kSwfBytes[offset])).valid()) {
+                return false;
+            }
+        }
+        std::uint32_t length = 0;
+        std::uint32_t firstByte = 0;
+        if (!bytes.set("position", 0) ||
+            !bytes.call("readUnsignedByte").read(firstByte) ||
+            firstByte != kSwfBytes[0] ||
+            !bytes.get("length").read(length) || length != kSize) {
+            return false;
+        }
+        return bytes.set("position", static_cast<std::uint32_t>(kSize));
+    }
+
     bool startLoad(xscal::Movie& movie) {
         xscal::Value root = movie.get("root1");
         xscal::Value loader = movie.create("flash.display.Loader");
@@ -136,10 +186,8 @@ private:
             !context.isObject() || !domain.isObject()) {
             return false;
         }
-        for (const unsigned char byte : kSwfBytes) {
-            if (!bytes.call("writeByte", static_cast<int>(byte)).valid()) {
-                return false;
-            }
+        if (!writeSwfBytes(bytes)) {
+            return false;
         }
         // Flash refuses loadBytes of a SWF with code unless allowCodeImport is set; Scaleform may not
         // have the property, so a failed set does not stop the load.

@@ -18,8 +18,10 @@
 #include "modules/core/plugin_settings_menu.hpp"
 #include "plugins/plugins.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <cwchar>
 #include <memory>
 #include <new>
@@ -72,34 +74,104 @@ enum class AddressLibraryUpdateStatus {
     } catch (...) { return false; }
 }
 
+struct ProviderState final {
+    const char* name;
+    bool enabled;
+};
+
+// Appends text to a log line, keeping it NUL-terminated. Text that does not
+// fit is cut off.
+void AppendLogText(char* line, std::size_t capacity, std::size_t& length,
+    const char* text) noexcept {
+    const int written = std::snprintf(
+        line + length, capacity - length, "%s", text);
+    if (written > 0) {
+        length = (std::min)(
+            capacity - 1, length + static_cast<std::size_t>(written));
+    }
+}
+
+// Logs the enabled providers on one line and the disabled ones after them,
+// so a missing provider stands out without reading every entry.
+template <std::size_t Count>
+void LogProviderStates(const std::array<ProviderState, Count>& providers) noexcept {
+    char line[512]{};
+    std::size_t length = 0;
+    std::size_t enabledCount = 0;
+    for (const auto& provider : providers) {
+        enabledCount += provider.enabled ? 1 : 0;
+    }
+    char counts[64]{};
+    std::snprintf(counts, sizeof(counts), "xScal Providers: %zu of %zu enabled",
+        enabledCount, Count);
+    AppendLogText(line, sizeof(line), length, counts);
+    const auto appendNames = [&](bool enabled, const char* heading) noexcept {
+        bool first = true;
+        for (const auto& provider : providers) {
+            if (provider.enabled != enabled) {
+                continue;
+            }
+            AppendLogText(line, sizeof(line), length, first ? heading : ", ");
+            AppendLogText(line, sizeof(line), length, provider.name);
+            first = false;
+        }
+    };
+    appendNames(true, ": ");
+    appendNames(false, "; disabled: ");
+    DiagnosticLog(line);
+}
+
 // Logs the basic runtime configuration to the diagnostic log.
 void LogRuntimeConfiguration(
     const TargetDefinition& target,
     std::uintptr_t base,
     const config::RuntimeVersion* version,
     const TargetProfile* profile = nullptr) noexcept {
-    DiagnosticLogFormat(
-        "xScal v%u.%u.%u minimal init by @DCHoaxer95",
-        static_cast<unsigned int>(config::kXScalVersion.major),
-        static_cast<unsigned int>(config::kXScalVersion.minor),
-        static_cast<unsigned int>(config::kXScalVersion.patch));
+    // Frames the version, library and target lines at the top of the log.
+    static constexpr char bannerRule[] =
+        "**************************************************";
+    DiagnosticLog(bannerRule);
+    DiagnosticLog("xScal by @DCHoaxer95 and collaborators");
     DiagnosticLog("Uses yyjson v" YYJSON_VERSION_STRING " by @ibireme");
     DiagnosticLog("Uses libdeflate v" LIBDEFLATE_VERSION_STRING " by Eric Biggers");
+    // The setMember RVA comes from the Address Library, which is not loaded
+    // when the runtime version could not be read.
+    char setMemberText[48]{};
+    if (profile != nullptr) {
+        std::snprintf(setMemberText, sizeof(setMemberText),
+            "RVA setMember = 0x%llX ",
+            static_cast<unsigned long long>(profile->setMemberOffset));
+    }
     if (version != nullptr) {
         DiagnosticLogFormat(
-            "imagebase = %p runtime = %s",
+            "%simagebase = %p runtime = %s",
+            setMemberText,
             reinterpret_cast<void*>(base),
             FormatRuntimeVersion(*version).data());
     } else {
-        DiagnosticLogFormat("imagebase = %p runtime = unknown",
+        DiagnosticLogFormat("%simagebase = %p runtime = unknown",
+            setMemberText,
             reinterpret_cast<void*>(base));
     }
-    DiagnosticLogFormat("platform: %s", TargetKindName(target.kind));
+    DiagnosticLogFormat(
+        "version: %u.%u.%u platform: %s",
+        static_cast<unsigned int>(config::kXScalVersion.major),
+        static_cast<unsigned int>(config::kXScalVersion.minor),
+        static_cast<unsigned int>(config::kXScalVersion.patch),
+        TargetKindName(target.kind));
+    DiagnosticLog("Starting init...");
+    DiagnosticLog(bannerRule);
     if (profile != nullptr) {
+        // Release is the xScal release the file was published with; revision
+        // counts the fixes published for that release.
+        const auto release = activeAddressLibrary.ReleaseXScalVersion();
         DiagnosticLogFormat(
-            "Address Library: loaded (%zu entries, RVA setMember=0x%llX)",
-            activeAddressLibrary.EntryCount(),
-            static_cast<unsigned long long>(profile->setMemberOffset));
+            "Address Library: loaded (release %u.%u.%u, revision %u, %zu entries)",
+            static_cast<unsigned int>(release.major),
+            static_cast<unsigned int>(release.minor),
+            static_cast<unsigned int>(release.patch),
+            static_cast<unsigned int>(activeAddressLibrary.Revision()),
+            activeAddressLibrary.EntryCount());
     }
     if (config::GetRuntimeConfig().loadedFromIni) {
         DiagnosticLog("xScal config: loaded xscal.ini");
@@ -803,9 +875,14 @@ VtableHookStatus Runtime::Initialize(
     if (bridgeStatus == VtableHookStatus::Installed) {
         initialized_ = true;
         const auto gamepadFilterStatus = gamepadInputFilter_.Install(moduleBase);
-        DiagnosticLogFormat(
-            "xScal GamepadInputFilter: %s",
-            VtableHookStatusName(gamepadFilterStatus));
+        if (gamepadFilterStatus == VtableHookStatus::Installed) {
+            DiagnosticLog(
+                "xScal GamepadInputFilter: the game's XInput calls pass through xScal");
+        } else {
+            DiagnosticLogFormat(
+                "xScal GamepadInputFilter: not installed (%s); the game reads XInput directly",
+                VtableHookStatusName(gamepadFilterStatus));
+        }
         if (gamepadFilterStatus == VtableHookStatus::Installed) {
             (void)gamepadInputFilter_.ForwardGamepads();
             if (profile.scePadBluetoothFlagOffset != 0) {
@@ -821,18 +898,18 @@ VtableHookStatus Runtime::Initialize(
         const bool playerMapPositionInstalled =
             playerMapPositionProvider_.Install(profile, moduleBase);
         pipBoyProviders_.Install(profile, moduleBase);
-        DiagnosticLogFormat(
-            "xScal Providers: {StatsEffectsProvider: %s, TimeDataProvider: %s, PlayerMapPositionProvider: %s, PipBoySpecialProvider: %s, PipBoyStatusProvider: %s, PipBoyPlayerInfoProvider: %s, PipBoyPerksProvider: %s, PipBoyQuestsProvider: %s, PipBoyInventoryProvider: %s, PipBoyCollectionsProvider: %s}",
-            statsEffectsInstalled ? "Enabled" : "Disabled",
-            pipBoyProviders_.time.IsActive() ? "Enabled" : "Disabled",
-            playerMapPositionInstalled ? "Enabled" : "Disabled",
-            pipBoyProviders_.special.IsActive() ? "Enabled" : "Disabled",
-            pipBoyProviders_.status.IsActive() ? "Enabled" : "Disabled",
-            pipBoyProviders_.playerInfo.IsActive() ? "Enabled" : "Disabled",
-            pipBoyProviders_.perks.IsActive() ? "Enabled" : "Disabled",
-            pipBoyProviders_.quests.IsActive() ? "Enabled" : "Disabled",
-            pipBoyProviders_.inventory.IsActive() ? "Enabled" : "Disabled",
-            pipBoyProviders_.collections.IsActive() ? "Enabled" : "Disabled");
+        LogProviderStates(std::array{
+            ProviderState{"StatsEffects", statsEffectsInstalled},
+            ProviderState{"TimeData", pipBoyProviders_.time.IsActive()},
+            ProviderState{"PlayerMapPosition", playerMapPositionInstalled},
+            ProviderState{"SPECIAL", pipBoyProviders_.special.IsActive()},
+            ProviderState{"Status", pipBoyProviders_.status.IsActive()},
+            ProviderState{"PlayerInfo", pipBoyProviders_.playerInfo.IsActive()},
+            ProviderState{"Perks", pipBoyProviders_.perks.IsActive()},
+            ProviderState{"Quests", pipBoyProviders_.quests.IsActive()},
+            ProviderState{"Inventory", pipBoyProviders_.inventory.IsActive()},
+            ProviderState{"Collections", pipBoyProviders_.collections.IsActive()},
+        });
         (void)archive::InstallArchiveStreamHook(profile.archiveStream, moduleBase);
         DiagnosticLogFormat(
             "xScal Modules: {xScalPriority: %s}",

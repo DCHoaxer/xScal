@@ -178,7 +178,8 @@ private:
 bool ResolveExecutableRelativePath(
     const wchar_t* relativePath,
     ExecutableRelativePath& resolvedPath) noexcept {
-    resolvedPath = {};
+    resolvedPath.length = 0;
+    resolvedPath.storage[0] = L'\0';
     if (relativePath == nullptr || relativePath[0] == L'\0' ||
         IsPathSeparator(relativePath[0])) {
         return false;

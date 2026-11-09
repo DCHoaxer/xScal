@@ -323,18 +323,18 @@ RuntimeConfig LoadRuntimeConfig() noexcept {
         return config;
     }
 
-    const platform::FilePresence presence = platform::QueryFilePresence(path);
-    if (presence == platform::FilePresence::Missing) {
-        return config;
-    }
-    if (presence == platform::FilePresence::Error) {
-        DiagnosticLog("xScal config: could not query xscal.ini");
-        return config;
-    }
-
     std::string contents;
     if (!platform::ReadBoundedFile(path, kMaximumIniSize, contents)) {
-        DiagnosticLog("xScal config: could not read xscal.ini");
+        // The presence query only runs after a failed read: a missing ini is
+        // normal, an unreadable one is logged.
+        const platform::FilePresence presence = platform::QueryFilePresence(path);
+        if (presence == platform::FilePresence::Missing) {
+            return config;
+        }
+        DiagnosticLog(
+            presence == platform::FilePresence::Error
+                ? "xScal config: could not query xscal.ini"
+                : "xScal config: could not read xscal.ini");
         return config;
     }
     config.loadedFromIni = true;

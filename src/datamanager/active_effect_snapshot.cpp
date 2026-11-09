@@ -17,6 +17,8 @@
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -525,11 +527,30 @@ private:
             return FailLocalPlayerEffects("array_unavailable");
         }
 
-        // Reserve before entering the game lock so vector growth cannot extend
-        // the critical section. The fixed pointer buffer lets one guarded copy
-        // contain faults without querying every element.
-        effects.reserve(kMaximumEffects);
-        std::array<std::uintptr_t, kMaximumEffects> effectPointers{};
+        // Reserve before entering the game lock so vector growth does not
+        // normally extend the critical section. The count is only a hint read
+        // without the lock; the real count is read again under the lock and
+        // the vector may still grow if the array grew in between.
+        EffectPointerArray hintArray{};
+        if (profile.effectArrayElementSize != 0 &&
+            platform::TryCopyBytes(
+                activeEffects, &hintArray, sizeof(hintArray)) &&
+            hintArray.end >= hintArray.begin) {
+            const auto hintCount =
+                (hintArray.end - hintArray.begin) /
+                profile.effectArrayElementSize;
+            effects.reserve((std::min)(hintCount, kMaximumEffects));
+        }
+        // The fixed pointer buffer lets one guarded copy contain faults
+        // without querying every element. It is allocated here, before the
+        // game lock, and is not zeroed: only the first count entries are
+        // written and read. A thread_local array would add its 32 KB to the
+        // thread storage of every thread in the game.
+        const std::unique_ptr<std::uintptr_t[]> effectPointers{
+            new (std::nothrow) std::uintptr_t[kMaximumEffects]};
+        if (effectPointers == nullptr) {
+            return FailLocalPlayerEffects("allocation_failed");
+        }
         ActiveEffectsTryReadGuard guard{
             releaseReadLock,
             reinterpret_cast<void*>(
@@ -574,7 +595,7 @@ private:
         if (pointerBytes != 0 &&
             !platform::TryCopyBytes(
                 reinterpret_cast<const void*>(effectArray.begin),
-                effectPointers.data(),
+                effectPointers.get(),
                 pointerBytes)) {
             return FailLocalPlayerEffects("array_storage_unavailable");
         }

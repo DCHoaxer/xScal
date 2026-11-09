@@ -2,6 +2,7 @@
 
 #include "xscal/plugin_api.h"
 #include "address/address_library_v3.hpp"
+#include "api/json_interface.hpp"
 #include "common/json.hpp"
 #include "config/target_profile.hpp"
 #include "platform/diagnostics.hpp"
@@ -9,8 +10,10 @@
 #include "plugins/plugin_signature.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -19,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace sf::plugins {
@@ -149,6 +153,10 @@ const void* __cdecl QueryHostInterface(
     if (maximumVersion >= 1u &&
         std::strcmp(name, XSCAL_PLUGIN_OPTIONS_INTERFACE) == 0) {
         return &kPluginOptions;
+    }
+    if (maximumVersion >= 1u &&
+        std::strcmp(name, XSCAL_JSON_INTERFACE) == 0) {
+        return jsonapi::Interface();
     }
     return nullptr;
 }
@@ -469,6 +477,58 @@ HRESULT CallPluginCreateDeviceAndSwapChain(
     }
 }
 
+// The name of a result code that D3D11 device creation returns, or null for
+// any other code.
+[[nodiscard]] const char* DeviceCreationResultName(HRESULT result) noexcept {
+    switch (result) {
+        case S_OK:
+            return "S_OK";
+        case S_FALSE:
+            return "S_FALSE";
+        case E_INVALIDARG:
+            return "E_INVALIDARG";
+        case E_OUTOFMEMORY:
+            return "E_OUTOFMEMORY";
+        case E_FAIL:
+            return "E_FAIL";
+        case E_NOINTERFACE:
+            return "E_NOINTERFACE";
+        case DXGI_ERROR_UNSUPPORTED:
+            return "DXGI_ERROR_UNSUPPORTED";
+        case DXGI_ERROR_INVALID_CALL:
+            return "DXGI_ERROR_INVALID_CALL";
+        case DXGI_ERROR_SDK_COMPONENT_MISSING:
+            return "DXGI_ERROR_SDK_COMPONENT_MISSING";
+        case DXGI_ERROR_DEVICE_REMOVED:
+            return "DXGI_ERROR_DEVICE_REMOVED";
+        default:
+            return nullptr;
+    }
+}
+
+void LogDeviceCreationResult(const char* hookName, HRESULT result) noexcept {
+    const char* const name = DeviceCreationResultName(result);
+    const auto code = static_cast<unsigned long>(result);
+    if (SUCCEEDED(result)) {
+        if (name != nullptr) {
+            DiagnosticLogFormatImmediate(
+                "xScal %s hook: device created (%s)", hookName, name);
+        } else {
+            DiagnosticLogFormatImmediate(
+                "xScal %s hook: device created (0x%08lX)", hookName, code);
+        }
+        return;
+    }
+    if (name != nullptr) {
+        DiagnosticLogFormatImmediate(
+            "xScal %s hook: device creation failed: %s (0x%08lX)",
+            hookName, name, code);
+    } else {
+        DiagnosticLogFormatImmediate(
+            "xScal %s hook: device creation failed (0x%08lX)", hookName, code);
+    }
+}
+
 HRESULT WINAPI CreateDevice(
     IDXGIAdapter* adapter, D3D_DRIVER_TYPE driverType, HMODULE software,
     UINT flags, const D3D_FEATURE_LEVEL* featureLevels, UINT featureLevelCount,
@@ -513,9 +573,7 @@ HRESULT WINAPI CreateDevice(
             selectedFeatureLevel,
             immediateContext);
     inPluginCall = false;
-    DiagnosticLogFormatImmediate(
-        "xScal D3D11CreateDevice hook: dispatch returned 0x%08lX",
-        static_cast<unsigned long>(result));
+    LogDeviceCreationResult("D3D11CreateDevice", result);
     return result;
 }
 
@@ -570,9 +628,7 @@ HRESULT WINAPI CreateDeviceAndSwapChain(
             selectedFeatureLevel,
             immediateContext);
     inPluginCall = false;
-    DiagnosticLogFormatImmediate(
-        "xScal D3D11CreateDeviceAndSwapChain hook: dispatch returned 0x%08lX",
-        static_cast<unsigned long>(result));
+    LogDeviceCreationResult("D3D11CreateDeviceAndSwapChain", result);
     return result;
 }
 
@@ -671,6 +727,140 @@ private:
     HANDLE handle_;
 };
 
+// Reads size bytes at offset. The handle is synchronous, so this moves the
+// file pointer; HashFile seeks to the start before it reads.
+[[nodiscard]] bool ReadFileAt(
+    HANDLE file, std::uint64_t offset, void* buffer, DWORD size) noexcept {
+    OVERLAPPED position{};
+    position.Offset = static_cast<DWORD>(offset);
+    position.OffsetHigh = static_cast<DWORD>(offset >> 32);
+    DWORD read{};
+    return ::ReadFile(file, buffer, size, &read, &position) != FALSE &&
+        read == size;
+}
+
+enum class PluginQueryExport : std::uint8_t {
+    Present,
+    Absent,
+    // The headers could not be read. The file is treated as a plugin, so a
+    // damaged plugin still gets its usual rejection message.
+    Unknown,
+};
+
+// Looks for the XScalPlugin_Query export in the DLL file without loading it.
+// Other DLLs can sit in the plugin folder, such as a runtime that a plugin
+// loads itself. The export names are searched by binary search, the same way
+// GetProcAddress finds them, so they must be sorted as the linker writes them.
+[[nodiscard]] PluginQueryExport FindPluginQueryExport(HANDLE file) noexcept {
+    constexpr char kQueryName[] = "XScalPlugin_Query";
+    constexpr DWORD kMaximumHeaderOffset = 0x1000000;
+    constexpr WORD kMaximumSections = 96;
+    constexpr DWORD kMaximumNames = 0x10000;
+
+    IMAGE_DOS_HEADER dosHeader{};
+    if (!ReadFileAt(file, 0, &dosHeader, sizeof(dosHeader)) ||
+        dosHeader.e_magic != IMAGE_DOS_SIGNATURE || dosHeader.e_lfanew <= 0 ||
+        static_cast<DWORD>(dosHeader.e_lfanew) > kMaximumHeaderOffset) {
+        return PluginQueryExport::Unknown;
+    }
+    const std::uint64_t ntOffset = static_cast<DWORD>(dosHeader.e_lfanew);
+    IMAGE_NT_HEADERS64 ntHeaders{};
+    if (!ReadFileAt(file, ntOffset, &ntHeaders, sizeof(ntHeaders)) ||
+        ntHeaders.Signature != IMAGE_NT_SIGNATURE ||
+        ntHeaders.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        ntHeaders.FileHeader.SizeOfOptionalHeader <
+            offsetof(IMAGE_OPTIONAL_HEADER64, DataDirectory) +
+                (IMAGE_DIRECTORY_ENTRY_EXPORT + 1) * sizeof(IMAGE_DATA_DIRECTORY) ||
+        ntHeaders.FileHeader.NumberOfSections == 0 ||
+        ntHeaders.FileHeader.NumberOfSections > kMaximumSections) {
+        return PluginQueryExport::Unknown;
+    }
+    if (ntHeaders.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT) {
+        return PluginQueryExport::Absent;
+    }
+    const auto& exportDirectoryEntry =
+        ntHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (exportDirectoryEntry.VirtualAddress == 0 || exportDirectoryEntry.Size == 0) {
+        return PluginQueryExport::Absent;
+    }
+
+    std::array<IMAGE_SECTION_HEADER, kMaximumSections> sections{};
+    const WORD sectionCount = ntHeaders.FileHeader.NumberOfSections;
+    const std::uint64_t sectionsOffset = ntOffset + sizeof(DWORD) +
+        sizeof(IMAGE_FILE_HEADER) + ntHeaders.FileHeader.SizeOfOptionalHeader;
+    if (!ReadFileAt(file, sectionsOffset, sections.data(),
+            static_cast<DWORD>(sectionCount * sizeof(IMAGE_SECTION_HEADER)))) {
+        return PluginQueryExport::Unknown;
+    }
+    // Returns the file offset of rva, or false when no section holds that
+    // many bytes of file data at rva.
+    const auto fileOffsetOf = [&](DWORD rva, DWORD length, std::uint64_t& offset) noexcept {
+        for (WORD index = 0; index < sectionCount; ++index) {
+            const auto& section = sections[index];
+            if (rva < section.VirtualAddress) {
+                continue;
+            }
+            const DWORD delta = rva - section.VirtualAddress;
+            if (delta < section.SizeOfRawData &&
+                length <= section.SizeOfRawData - delta) {
+                offset = std::uint64_t{section.PointerToRawData} + delta;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    IMAGE_EXPORT_DIRECTORY exportDirectory{};
+    std::uint64_t exportDirectoryOffset{};
+    if (!fileOffsetOf(exportDirectoryEntry.VirtualAddress, sizeof(exportDirectory),
+            exportDirectoryOffset) ||
+        !ReadFileAt(file, exportDirectoryOffset, &exportDirectory, sizeof(exportDirectory))) {
+        return PluginQueryExport::Unknown;
+    }
+    if (exportDirectory.NumberOfNames == 0) {
+        return PluginQueryExport::Absent;
+    }
+    std::uint64_t namesOffset{};
+    if (exportDirectory.NumberOfNames > kMaximumNames ||
+        !fileOffsetOf(exportDirectory.AddressOfNames,
+            exportDirectory.NumberOfNames * sizeof(DWORD), namesOffset)) {
+        return PluginQueryExport::Unknown;
+    }
+
+    DWORD low = 0;
+    DWORD high = exportDirectory.NumberOfNames;
+    while (low < high) {
+        const DWORD middle = low + (high - low) / 2;
+        DWORD nameRva{};
+        std::uint64_t nameOffset{};
+        // One byte more than the name, so a longer name that starts with it
+        // compares as greater.
+        char name[sizeof(kQueryName)]{};
+        if (!ReadFileAt(file, namesOffset + std::uint64_t{middle} * sizeof(DWORD),
+                &nameRva, sizeof(nameRva)) ||
+            !fileOffsetOf(nameRva, 1, nameOffset)) {
+            return PluginQueryExport::Unknown;
+        }
+        DWORD read{};
+        OVERLAPPED position{};
+        position.Offset = static_cast<DWORD>(nameOffset);
+        position.OffsetHigh = static_cast<DWORD>(nameOffset >> 32);
+        if (::ReadFile(file, name, sizeof(name), &read, &position) == FALSE || read == 0) {
+            return PluginQueryExport::Unknown;
+        }
+        const int order = std::strncmp(name, kQueryName, sizeof(name));
+        if (order == 0) {
+            return PluginQueryExport::Present;
+        }
+        if (order < 0) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return PluginQueryExport::Absent;
+}
+
 struct MessageDialog final {
     std::wstring text;
     UINT icon;
@@ -758,6 +948,11 @@ void LoadModule(const std::wstring& path) {
         DiagnosticLogFormatImmediate(
             "xScal plugin '%ls': could not open file (%lu)",
             path.c_str(), ::GetLastError());
+        return;
+    }
+    // A DLL without XScalPlugin_Query is not an xScal plugin and is left
+    // alone without a log line.
+    if (FindPluginQueryExport(dllFile.Get()) == PluginQueryExport::Absent) {
         return;
     }
     const std::wstring signaturePath = path + L".sig";
@@ -1136,11 +1331,11 @@ std::vector<std::wstring> ReadLoadOrder() {
     platform::ExecutableRelativePath path;
     if (!platform::ResolveExecutableRelativePath(
             L"Data\\XSCAL\\Plugins\\loadorder.txt", path)) return names;
-    const auto presence = platform::QueryFilePresence(path);
-    if (presence == platform::FilePresence::Missing) return names;
     std::string contents;
-    if (presence == platform::FilePresence::Error ||
-        !platform::ReadBoundedFile(path, kMaximumLoadOrderSize, contents)) {
+    if (!platform::ReadBoundedFile(path, kMaximumLoadOrderSize, contents)) {
+        // The presence query only runs after a failed read: a missing file is
+        // normal, an unreadable one is logged.
+        if (platform::QueryFilePresence(path) == platform::FilePresence::Missing) return names;
         DiagnosticLogImmediate("xScal plugins: could not read loadorder.txt");
         return names;
     }
@@ -1231,11 +1426,17 @@ BOOL CALLBACK LoadModules(PINIT_ONCE, PVOID, PVOID*) noexcept {
                 if (isNamed(pluginPath, loadOrder[index])) return index;
             return loadOrder.size();
         };
-        std::sort(paths.begin(), paths.end(), [&](const auto& left, const auto& right) {
-            const auto leftRank = rank(left);
-            const auto rightRank = rank(right);
-            return leftRank != rightRank ? leftRank < rightRank : left < right;
-        });
+        // Each rank is computed once; computing it inside the comparison scans
+        // loadorder.txt for every comparison.
+        std::vector<std::pair<std::size_t, std::wstring>> ranked;
+        ranked.reserve(paths.size());
+        for (auto& pluginPath : paths) {
+            const std::size_t pluginRank = rank(pluginPath);
+            ranked.emplace_back(pluginRank, std::move(pluginPath));
+        }
+        std::sort(ranked.begin(), ranked.end());
+        for (std::size_t index = 0; index < ranked.size(); ++index)
+            paths[index] = std::move(ranked[index].second);
         for (const auto& name : loadOrder) {
             if (std::none_of(paths.begin(), paths.end(),
                     [&](const auto& pluginPath) { return isNamed(pluginPath, name); }))

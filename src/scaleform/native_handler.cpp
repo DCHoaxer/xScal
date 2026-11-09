@@ -6,20 +6,23 @@
 #include "scaleform/scaleform_layout.hpp"
 #include "scaleform/value.hpp"
 
+#include <atomic>
 #include <bit>
-#include <condition_variable>
+#include <chrono>
 #include <cstring>
 #include <limits>
-#include <mutex>
 #include <string>
+#include <thread>
 
 namespace sf {
 namespace {
 
-std::mutex callbackRouterMutex;
-std::condition_variable callbackRouterIdle;
-ScaleformCallbackRouter* activeCallbackRouter{};
-unsigned callbackDispatchInFlight{};
+// Invoke raises callbackDispatchInFlight before it loads the router, and
+// ClearNativeCallbackRouter clears the router before it reads the count. With
+// sequentially consistent operations on both sides, a call that loaded the
+// old router is counted by the time the clear reads the count.
+std::atomic<ScaleformCallbackRouter*> activeCallbackRouter{};
+std::atomic<unsigned> callbackDispatchInFlight{};
 thread_local std::string returnStringBuffer;
 
 // Encodes a scalar or string payload as the GFx value written to a native call's result.
@@ -195,23 +198,26 @@ NativeFunctionHandler::NativeFunctionHandler() noexcept
 
 bool PublishNativeCallbackRouter(
     ScaleformCallbackRouter& callbackRouter) noexcept {
-    std::lock_guard lock{callbackRouterMutex};
-    if (activeCallbackRouter != nullptr &&
-        activeCallbackRouter != &callbackRouter) {
-        return false;
-    }
-    activeCallbackRouter = &callbackRouter;
-    return true;
+    ScaleformCallbackRouter* expected{};
+    return activeCallbackRouter.compare_exchange_strong(
+               expected, &callbackRouter) ||
+        expected == &callbackRouter;
 }
 
 void ClearNativeCallbackRouter(
     ScaleformCallbackRouter& callbackRouter) noexcept {
-    std::unique_lock lock{callbackRouterMutex};
-    if (activeCallbackRouter == &callbackRouter) {
-        activeCallbackRouter = nullptr;
-    }
+    ScaleformCallbackRouter* expected = &callbackRouter;
+    (void)activeCallbackRouter.compare_exchange_strong(expected, nullptr);
     // Must not be called from inside a dispatch on this same thread.
-    callbackRouterIdle.wait(lock, [] { return callbackDispatchInFlight == 0; });
+    // This runs only when the MovieRoot hook is removed, so it polls instead
+    // of making every native call wake a waiter.
+    for (unsigned int polls = 0; callbackDispatchInFlight.load() != 0; ++polls) {
+        if (polls < 64) {
+            std::this_thread::yield();
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+    }
 }
 
 bool CommitScaleformResult(
@@ -293,29 +299,20 @@ void __fastcall NativeFunctionHandler::Invoke(
         params->thisObject,
         params->argumentFrame,
     };
-    ScaleformCallbackRouter* router{};
-    {
-        std::lock_guard lock{callbackRouterMutex};
-        router = activeCallbackRouter;
-        if (router == nullptr) {
-            DiagnosticLogFormat(
-                "Scaleform call: no active router (name=%.*s, arguments=%zu)",
-                static_cast<int>(callbackName.size()),
-                callbackName.data(),
-                params->argumentCount);
-            return;
-        }
-        ++callbackDispatchInFlight;
+    callbackDispatchInFlight.fetch_add(1);
+    ScaleformCallbackRouter* const router = activeCallbackRouter.load();
+    if (router == nullptr) {
+        callbackDispatchInFlight.fetch_sub(1);
+        DiagnosticLogFormat(
+            "Scaleform call: no active router (name=%.*s, arguments=%zu)",
+            static_cast<int>(callbackName.size()),
+            callbackName.data(),
+            params->argumentCount);
+        return;
     }
 
     const bool dispatched = router->Dispatch(callbackName, call);
-
-    {
-        std::lock_guard lock{callbackRouterMutex};
-        if (--callbackDispatchInFlight == 0) {
-            callbackRouterIdle.notify_all();
-        }
-    }
+    callbackDispatchInFlight.fetch_sub(1);
 
     if (!dispatched) {
         DiagnosticLogFormat(

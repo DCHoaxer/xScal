@@ -47,7 +47,9 @@ private:
     std::shared_ptr<NativeFunctionHandler> functionHandler_;
     bool callbackRouterPublished_{};
     mutable std::mutex lifecycleMutex_;
-    std::shared_ptr<MovieRootRouteState> routeState_;
+    // The route this controller published. It is never deleted, because a
+    // hook call can still use it after Restore.
+    MovieRootRouteState* routeState_{};
 };
 
 void __fastcall HookedMovieRootAdvanceFrame(

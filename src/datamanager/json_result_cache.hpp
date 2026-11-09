@@ -27,10 +27,21 @@ public:
     JsonResultCache(const JsonResultCache&) = delete;
     JsonResultCache& operator=(const JsonResultCache&) = delete;
 
+    enum class Lookup {
+        Miss,
+        Hit,
+        // A build failed less than kFreshnessMilliseconds ago.
+        RecentFailure,
+    };
+
     // Copies the stored JSON when it was stored less than
     // kFreshnessMilliseconds ago.
     [[nodiscard]] bool TryCopyFresh(std::string& json) noexcept;
+    // Like TryCopyFresh, but also reports a failure stored by StoreFailure so
+    // a failing build is not rerun on every call.
+    [[nodiscard]] Lookup CopyFresh(std::string& json) noexcept;
     void Store(const std::string& json) noexcept;
+    void StoreFailure() noexcept;
     void Clear() noexcept;
 
 private:
@@ -39,6 +50,7 @@ private:
     std::string json_;
     std::uint64_t storedTick_{};
     bool stored_{};
+    bool failed_{};
 };
 
 }

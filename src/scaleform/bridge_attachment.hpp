@@ -5,6 +5,7 @@
 #include "scaleform/value.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -28,6 +29,9 @@ struct NativeBridgeAttachmentState final {
     NativeCallIdentity call{};
     bool membersReady{};
     bool chatReady{};
+
+    [[nodiscard]] constexpr bool operator==(
+        const NativeBridgeAttachmentState&) const noexcept = default;
 };
 
 struct BridgeAttachmentResult final {
@@ -76,7 +80,13 @@ public:
         void* movieRoot,
         std::string_view requestedPath,
         ScaleformValue* resolvedComponent) noexcept;
-    void ProbeComponents(void* movieRoot) noexcept;
+    // Returns true when every component probed on lookup is attached to
+    // movieRoot. Probing then does nothing for it until AttachmentChangeCount
+    // changes.
+    [[nodiscard]] bool ProbeComponents(void* movieRoot) noexcept;
+    // Changes whenever an attachment is forgotten, a component root is
+    // evicted, or an attached call is added or changed.
+    [[nodiscard]] std::uint64_t AttachmentChangeCount() const noexcept;
     [[nodiscard]] BridgeAttachmentResult AttachResolved(
         void* movieRoot,
         ScaleformValue& bridge) noexcept;
@@ -153,6 +163,16 @@ private:
         std::size_t& probeCount,
         void* movieRoot) noexcept;
     void RememberRoot(void* movieRoot) noexcept;
+    // Requires mutex_.
+    void RememberComponentRoot(
+        ComponentAttachments& componentState,
+        void* movieRoot) noexcept;
+    // Returns true and fills result when this thread last saw bridge ready on
+    // movieRoot, nothing changed since, and its call() is still the attached one.
+    [[nodiscard]] bool ReadKnownReadyBridge(
+        void* movieRoot,
+        ScaleformValue& bridge,
+        BridgeAttachmentResult& result) noexcept;
     // Requires mutex_. Leaves roots_ unchanged.
     void ForgetRootAttachments(void* movieRoot) noexcept;
     static void ForgetComponent(
@@ -163,6 +183,11 @@ private:
     ResolvedScaleformApi api_{};
     NativeFunctionHandler* functionHandler_{};
     TargetKind targetKind_{TargetKind::Steam};
+    // Unique for the process, so a per-thread entry of a destroyed service
+    // never matches a new service at the same address.
+    std::uint64_t serviceId_{};
+    // Written under mutex_, read without it.
+    std::atomic<std::uint64_t> attachmentChanges_{};
     std::mutex mutex_;
     FixedUniqueSet<void*, kMaximumBridgedMovieRoots> roots_{};
     std::array<

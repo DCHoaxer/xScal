@@ -27,6 +27,8 @@ constexpr std::size_t kTotalOutOffset = 0x1C;
 constexpr std::uint32_t kEntryMarker = 0xFA57DEF1u;
 constexpr std::uint32_t kMaxEntryBytes = 256u * 1024u * 1024u;
 constexpr std::uint32_t kMaxPackedBytes = 64u * 1024u * 1024u;
+// Packed buffer size a reading thread keeps between entries.
+constexpr std::uint32_t kKeptPackedBytes = 8u * 1024u * 1024u;
 // Same value as SEEK_CUR. A zlib stream supports only a forward skip from the
 // current position.
 constexpr std::uint32_t kSeekCurrent = 1;
@@ -118,7 +120,10 @@ struct ThreadScratch final {
 
     [[nodiscard]] void* packedBuffer(std::uint32_t size) noexcept
     {
-        if (size <= capacity)
+        // A buffer above kKeptPackedBytes is reused only for another large
+        // entry. The next smaller entry replaces it, so each reading thread
+        // keeps at most kKeptPackedBytes once its large entries are read.
+        if (size <= capacity && (capacity <= kKeptPackedBytes || size > kKeptPackedBytes))
             return packed;
         if (packed != nullptr)
             VirtualFree(packed, 0, MEM_RELEASE);
@@ -440,7 +445,7 @@ bool InstallArchiveStreamHook(
         return false;
     }
     installed.store(true, std::memory_order_release);
-    DiagnosticLog("xScal ArchiveStream Installed");
+    DiagnosticLog("xScal ArchiveStream: compressed archive entries are decompressed with libdeflate");
     return true;
 }
 

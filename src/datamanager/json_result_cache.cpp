@@ -15,17 +15,26 @@ JsonResultCache::JsonResultCache(TickFn tick) noexcept
     : tick_(tick != nullptr ? tick : &SystemTick) {}
 
 bool JsonResultCache::TryCopyFresh(std::string& json) noexcept {
+    return CopyFresh(json) == Lookup::Hit;
+}
+
+JsonResultCache::Lookup JsonResultCache::CopyFresh(
+    std::string& json) noexcept {
     std::scoped_lock lock{mutex_};
-    if (!stored_ || tick_() - storedTick_ >= kFreshnessMilliseconds) {
-        return false;
+    if (!(stored_ || failed_) ||
+        tick_() - storedTick_ >= kFreshnessMilliseconds) {
+        return Lookup::Miss;
+    }
+    if (failed_) {
+        return Lookup::RecentFailure;
     }
     try {
         json = json_;
     } catch (...) {
         json.clear();
-        return false;
+        return Lookup::Miss;
     }
-    return true;
+    return Lookup::Hit;
 }
 
 void JsonResultCache::Store(const std::string& json) noexcept {
@@ -35,16 +44,27 @@ void JsonResultCache::Store(const std::string& json) noexcept {
     } catch (...) {
         json_.clear();
         stored_ = false;
+        failed_ = false;
         return;
     }
     storedTick_ = tick_();
     stored_ = true;
+    failed_ = false;
+}
+
+void JsonResultCache::StoreFailure() noexcept {
+    std::scoped_lock lock{mutex_};
+    json_.clear();
+    stored_ = false;
+    failed_ = true;
+    storedTick_ = tick_();
 }
 
 void JsonResultCache::Clear() noexcept {
     std::scoped_lock lock{mutex_};
     json_.clear();
     stored_ = false;
+    failed_ = false;
 }
 
 }

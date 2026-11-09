@@ -27,8 +27,9 @@ constexpr std::string_view kStoragePrefix = "Data\\modsdata\\";
 constexpr std::string_view kStorageSuffix = ".json";
 constexpr std::size_t kMaximumNameLength = 64;
 constexpr std::size_t kMaximumJsonDepth = 64;
-// Bounds the in-memory cache. A save under a new name is rejected once the
-// cache holds this many names; saves under cached names still succeed.
+// Bounds the in-memory cache. A save under a new name is rejected while this
+// many names have a write queued or failed; saves under cached names still
+// succeed.
 constexpr std::size_t kMaximumCachedDocuments = 256;
 
 [[nodiscard]] bool IsAllowedNameCharacter(char value) noexcept {
@@ -193,41 +194,66 @@ bool Service::Register(void* movie, std::string_view name) noexcept {
     }
 }
 
+bool Service::IsDocumentNewerLocked(std::string_view name) {
+    const std::wstring relative = StorageRelativePath(name);
+    return fileWriter_->IsWriteQueued(relative) ||
+        fileWriter_->HasFailedWrite(relative);
+}
+
+void Service::EraseWrittenDocumentsLocked() {
+    if (fileWriter_ == nullptr) {
+        return;
+    }
+    for (auto entry = documents_.begin(); entry != documents_.end();) {
+        if (IsDocumentNewerLocked(entry->first)) {
+            ++entry;
+        } else {
+            entry = documents_.erase(entry);
+        }
+    }
+}
+
 bool Service::QueueWriteLocked(
     std::string_view name,
-    std::string_view document) {
+    std::string_view document,
+    std::string&& copy) {
     if (fileWriter_ == nullptr) {
         return false;
     }
     std::string key{name};
     if (documents_.size() >= kMaximumCachedDocuments &&
         !documents_.contains(key)) {
-        return false;
+        EraseWrittenDocumentsLocked();
+        if (documents_.size() >= kMaximumCachedDocuments) {
+            return false;
+        }
     }
     const std::wstring relative = StorageRelativePath(name);
     if (fileWriter_->SubmitRelativeFileWrite(relative, document) !=
         FileCommandSubmitStatus::Accepted) {
         return false;
     }
-    documents_.insert_or_assign(std::move(key), std::string{document});
+    documents_.insert_or_assign(std::move(key), std::move(copy));
     return true;
 }
 
-bool Service::LoadLocked(std::string_view name, std::string& document) {
+bool Service::CopyNewerDocumentLocked(
+    std::string_view name,
+    std::string& document) {
     // The saved copy is newer than the file until its write finishes, or for
     // as long as the last write failed and the file still holds older data.
     // After a successful write the file is read again, so edits made outside
-    // the game load.
+    // the game load, and the copy is not needed any more.
     const auto cached = documents_.find(std::string{name});
-    if (cached != documents_.end() && fileWriter_ != nullptr) {
-        const std::wstring relative = StorageRelativePath(name);
-        if (fileWriter_->IsWriteQueued(relative) ||
-            fileWriter_->HasFailedWrite(relative)) {
-            document = cached->second;
-            return true;
-        }
+    if (cached == documents_.end() || fileWriter_ == nullptr) {
+        return false;
     }
-    return LoadDocument(name, document);
+    if (!IsDocumentNewerLocked(name)) {
+        documents_.erase(cached);
+        return false;
+    }
+    document = cached->second;
+    return true;
 }
 
 bool Service::Save(void* movie, std::string_view document) noexcept {
@@ -235,12 +261,15 @@ bool Service::Save(void* movie, std::string_view document) noexcept {
         return false;
     }
     try {
+        // Copied before the lock so a Load on another thread does not wait
+        // for it.
+        std::string copy{document};
         std::scoped_lock lock{mutex_};
         const auto found = registrations_.find(movie);
         if (found == registrations_.end()) {
             return false;
         }
-        return QueueWriteLocked(found->second, document);
+        return QueueWriteLocked(found->second, document, std::move(copy));
     } catch (...) {
         return false;
     }
@@ -253,22 +282,33 @@ bool Service::Save(
         return false;
     }
     try {
+        std::string copy{document};
         std::scoped_lock lock{mutex_};
-        return QueueWriteLocked(name, document);
+        return QueueWriteLocked(name, document, std::move(copy));
     } catch (...) {
         return false;
     }
 }
 
+// The file is read and validated after mutex_ is released, so a Save or Load
+// on another thread does not wait for disk I/O. Writes replace the file
+// atomically, so the read sees either the old or the new document.
 bool Service::Load(void* movie, std::string& document) noexcept {
     document.clear();
     try {
-        std::scoped_lock lock{mutex_};
-        const auto found = registrations_.find(movie);
-        if (found == registrations_.end()) {
-            return false;
+        std::string name;
+        {
+            std::scoped_lock lock{mutex_};
+            const auto found = registrations_.find(movie);
+            if (found == registrations_.end()) {
+                return false;
+            }
+            if (CopyNewerDocumentLocked(found->second, document)) {
+                return true;
+            }
+            name = found->second;
         }
-        return LoadLocked(found->second, document);
+        return LoadDocument(name, document);
     } catch (...) {
         document.clear();
         return false;
@@ -283,8 +323,13 @@ bool Service::Load(
         return false;
     }
     try {
-        std::scoped_lock lock{mutex_};
-        return LoadLocked(name, document);
+        {
+            std::scoped_lock lock{mutex_};
+            if (CopyNewerDocumentLocked(name, document)) {
+                return true;
+            }
+        }
+        return LoadDocument(name, document);
     } catch (...) {
         document.clear();
         return false;

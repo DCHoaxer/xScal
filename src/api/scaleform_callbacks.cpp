@@ -27,11 +27,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace sf {
 namespace {
@@ -265,21 +267,22 @@ template <FileCommand Command>
 [[nodiscard]] bool HandleRuntimeInfo(
     const ScaleformCall& call,
     const ScaleformCallbackTargets& targets) noexcept {
-    try {
-        std::string runtimeInfo{R"json({"runtime":"xScal","version":")json"};
-        runtimeInfo.append(std::to_string(config::kXScalVersion.major));
-        runtimeInfo.push_back('.');
-        runtimeInfo.append(std::to_string(config::kXScalVersion.minor));
-        runtimeInfo.push_back('.');
-        runtimeInfo.append(std::to_string(config::kXScalVersion.patch));
-        runtimeInfo.append(R"json(","platform":")json");
-        runtimeInfo.append(TargetKindName(
-            targets.targetKind.load(std::memory_order_acquire)));
-        runtimeInfo.append(R"json("})json");
-        return call.result->SetString(runtimeInfo);
-    } catch (...) {
+    // Formatted on each call into a stack buffer: the platform comes from
+    // targetKind, which can still change after the first call.
+    char runtimeInfo[96];
+    const int length = std::snprintf(
+        runtimeInfo,
+        sizeof(runtimeInfo),
+        R"json({"runtime":"xScal","version":"%u.%u.%u","platform":"%s"})json",
+        static_cast<unsigned int>(config::kXScalVersion.major),
+        static_cast<unsigned int>(config::kXScalVersion.minor),
+        static_cast<unsigned int>(config::kXScalVersion.patch),
+        TargetKindName(targets.targetKind.load(std::memory_order_acquire)));
+    if (length < 0 || static_cast<std::size_t>(length) >= sizeof(runtimeInfo)) {
         return false;
     }
+    return call.result->SetString(
+        std::string_view{runtimeInfo, static_cast<std::size_t>(length)});
 }
 
 // Result of one walk over the tracked movie roots. The walk stops at the
@@ -425,14 +428,24 @@ using StealthMeterRequest =
     return call.result->SetString(kInvalidRequestPayload);
 }
 
+// Provider payloads can be hundreds of KiB and Request copies them into the
+// caller's string, so each thread keeps the buffer of its last request. A
+// call nested on the same thread while the buffer is moved out finds it empty
+// and allocates its own.
+thread_local std::string providerPayloadBuffer;
+
 // Writes the result of the Game.* provider kProvider points to.
 template <auto kProvider, const std::string_view& kPendingPayload>
 [[nodiscard]] bool HandlePipBoyProvider(
     const ScaleformCall& call,
     const ScaleformCallbackTargets& targets) noexcept {
-    std::string payload;
+    std::string payload = std::move(providerPayloadBuffer);
+    payload.clear();
     const auto status = (targets.pipBoy.*kProvider).Request(payload);
-    return SetGameProviderResult(call, kPendingPayload, status, payload);
+    const bool written =
+        SetGameProviderResult(call, kPendingPayload, status, payload);
+    providerPayloadBuffer = std::move(payload);
+    return written;
 }
 
 // Requests the provider kProvider points to and returns the JSON its Game.*
@@ -540,13 +553,17 @@ struct GameObjectRequest final {
     if (source == kGameObjectSources.end()) {
         return false;
     }
-    std::string payload;
+    std::string payload = std::move(providerPayloadBuffer);
+    payload.clear();
     GameObjectRequest request{
         static_cast<std::size_t>(source - kGameObjectSources.begin()),
         source->readJson(targets.pipBoy, payload),
         call.result,
     };
-    return VisitMovieRoot(call.movie, &WriteGameObjectResult, &request);
+    const bool written =
+        VisitMovieRoot(call.movie, &WriteGameObjectResult, &request);
+    providerPayloadBuffer = std::move(payload);
+    return written;
 }
 
 using KeyOperation = bool (InputState::*)(std::uint8_t) noexcept;
@@ -600,28 +617,27 @@ template <GamepadAnalogOperation kOperation>
             call, 1, XUSER_MAX_COUNT - 1, true, userIndex)
         ? targets.input.PollGamepad(userIndex)
         : InputState::GamepadSnapshot{};
-    try {
-        std::string payload{"{\"connected\":"};
-        payload.append(pad.connected ? "true" : "false");
-        payload.append(",\"lt\":");
-        payload.append(std::to_string(pad.leftTrigger));
-        payload.append(",\"rt\":");
-        payload.append(std::to_string(pad.rightTrigger));
-        payload.append(",\"lx\":");
-        payload.append(std::to_string(pad.leftX));
-        payload.append(",\"ly\":");
-        payload.append(std::to_string(pad.leftY));
-        payload.append(",\"rx\":");
-        payload.append(std::to_string(pad.rightX));
-        payload.append(",\"ry\":");
-        payload.append(std::to_string(pad.rightY));
-        payload.append(",\"buttons\":");
-        payload.append(std::to_string(pad.buttons));
-        payload.push_back('}');
-        return call.result->SetString(payload);
-    } catch (...) {
+    // SWFs call this on every poll, so the text is formatted into a stack
+    // buffer instead of a heap string.
+    char payload[160];
+    const int length = std::snprintf(
+        payload,
+        sizeof(payload),
+        "{\"connected\":%s,\"lt\":%d,\"rt\":%d,\"lx\":%d,\"ly\":%d,"
+        "\"rx\":%d,\"ry\":%d,\"buttons\":%d}",
+        pad.connected ? "true" : "false",
+        static_cast<int>(pad.leftTrigger),
+        static_cast<int>(pad.rightTrigger),
+        static_cast<int>(pad.leftX),
+        static_cast<int>(pad.leftY),
+        static_cast<int>(pad.rightX),
+        static_cast<int>(pad.rightY),
+        static_cast<int>(pad.buttons));
+    if (length < 0 || static_cast<std::size_t>(length) >= sizeof(payload)) {
         return false;
     }
+    return call.result->SetString(
+        std::string_view{payload, static_cast<std::size_t>(length)});
 }
 
 [[nodiscard]] bool HandleBeginMouseCapture(
@@ -644,28 +660,25 @@ template <GamepadAnalogOperation kOperation>
     const ScaleformCallbackTargets& targets) noexcept {
     const InputState::MouseSnapshot mouse = targets.input.PollMouse();
     const auto flag = [](bool value) { return value ? "true" : "false"; };
-    try {
-        std::string payload{"{\"dx\":"};
-        payload.append(std::to_string(mouse.dx));
-        payload.append(",\"dy\":");
-        payload.append(std::to_string(mouse.dy));
-        payload.append(",\"wheel\":");
-        payload.append(std::to_string(mouse.wheel));
-        payload.append(",\"left\":");
-        payload.append(flag(mouse.left));
-        payload.append(",\"right\":");
-        payload.append(flag(mouse.right));
-        payload.append(",\"leftPressed\":");
-        payload.append(flag(mouse.leftPressed));
-        payload.append(",\"rightPressed\":");
-        payload.append(flag(mouse.rightPressed));
-        payload.append(",\"capturing\":");
-        payload.append(flag(mouse.capturing));
-        payload.push_back('}');
-        return call.result->SetString(payload);
-    } catch (...) {
+    char payload[256];
+    const int length = std::snprintf(
+        payload,
+        sizeof(payload),
+        "{\"dx\":%lld,\"dy\":%lld,\"wheel\":%lld,\"left\":%s,\"right\":%s,"
+        "\"leftPressed\":%s,\"rightPressed\":%s,\"capturing\":%s}",
+        static_cast<long long>(mouse.dx),
+        static_cast<long long>(mouse.dy),
+        static_cast<long long>(mouse.wheel),
+        flag(mouse.left),
+        flag(mouse.right),
+        flag(mouse.leftPressed),
+        flag(mouse.rightPressed),
+        flag(mouse.capturing));
+    if (length < 0 || static_cast<std::size_t>(length) >= sizeof(payload)) {
         return false;
     }
+    return call.result->SetString(
+        std::string_view{payload, static_cast<std::size_t>(length)});
 }
 
 [[nodiscard]] bool HandleBeginInput(
