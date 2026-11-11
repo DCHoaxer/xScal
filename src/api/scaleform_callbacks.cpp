@@ -899,6 +899,7 @@ template <GamepadOperation kOperation>
     PluginScaleformDispatch dispatch) noexcept {
     if (call.arguments == nullptr || call.argumentCount == 0 ||
         call.argumentCount - 1 > XSCAL_SCALEFORM_MAX_ARGUMENTS) {
+        DiagnosticLog("scaleform dispatch - invalid argument count");
         return false;
     }
     const auto* const rawArguments =
@@ -913,6 +914,7 @@ template <GamepadOperation kOperation>
                     (static_cast<std::size_t>(index) + 1) *
                         layout::kFunctionArgumentSize,
                 arguments[index])) {
+            DiagnosticLog("scaleform dispatch - invalid argument");
             return false;
         }
     }
@@ -923,9 +925,15 @@ template <GamepadOperation kOperation>
             argumentCount != 0 ? arguments.data() : nullptr,
             argumentCount,
             result)) {
+        DiagnosticLog("scaleform dispatch - dispatch error");
         return false;
     }
-    return SetPluginResult(result, *call.result);
+    if (!SetPluginResult(result, *call.result)) {
+      DiagnosticLog("scaleform dispatch - plugin result error");
+      return false;
+    } else {
+      return true;
+    }
 }
 
 constexpr std::array kScaleformCallbacks{
