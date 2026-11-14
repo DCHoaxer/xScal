@@ -810,12 +810,14 @@ void ChatSession::RunSubscriber(
             subscriber_.lastError = RelayStatusCode(result.status);
             subscriber_.nextReconnectDelayMs = delay;
         }
-        std::uint32_t waited{};
-        while (waited < delay &&
-               !connectionStop_.load(std::memory_order_acquire)) {
-            const auto slice = (std::min)(100U, delay - waited);
-            std::this_thread::sleep_for(std::chrono::milliseconds{slice});
-            waited += slice;
+        // InterruptConnection notifies reconnectWake_, so a stop ends the
+        // wait at once instead of at the next poll.
+        {
+            std::unique_lock lock{reconnectMutex_};
+            reconnectWake_.wait_for(
+                lock, std::chrono::milliseconds{delay}, [this] {
+                    return connectionStop_.load(std::memory_order_acquire);
+                });
         }
     }
     subscriberConnection_.Close(connectionStop_.load(std::memory_order_acquire));
@@ -1047,11 +1049,17 @@ std::string ChatSession::PollEvents(
     std::uint64_t droppedToReport{};
     {
         std::scoped_lock lock{eventMutex_};
-        for (const auto& event : events_) {
-            if (event.id <= cursor || selectedCount == maximum) {
-                continue;
-            }
-            selected[selectedCount++] = event;
+        // Ids ascend in the queue, so the first event after the cursor is
+        // found by binary search instead of walking every queued event.
+        auto next = std::upper_bound(
+            events_.begin(),
+            events_.end(),
+            cursor,
+            [](std::uint64_t id, const QueuedEvent& event) {
+                return id < event.id;
+            });
+        for (; next != events_.end() && selectedCount < maximum; ++next) {
+            selected[selectedCount++] = *next;
         }
         if (pendingDroppedEvents_ != 0 && selectedCount < maximum) {
             droppedToReport = pendingDroppedEvents_;
@@ -1129,6 +1137,12 @@ std::string ChatSession::PollEvents(
 
 void ChatSession::InterruptConnection() noexcept {
     connectionStop_.store(true, std::memory_order_release);
+    {
+        // Taking the mutex orders the store before the waiter's predicate
+        // check, so the wake-up cannot be missed.
+        std::scoped_lock lock{reconnectMutex_};
+    }
+    reconnectWake_.notify_all();
     subscriberConnection_.Interrupt();
     requestConnection_.Interrupt();
 }

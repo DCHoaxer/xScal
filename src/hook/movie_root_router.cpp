@@ -111,6 +111,10 @@ struct MovieRootValidationCache final {
     const void* movieRoot{};
     const void* expectedVtable{};
     modules::CoreModule coreModule{};
+    // Set when every component probed on lookup was attached to movieRoot
+    // while the route's attachment change count was attachmentChanges.
+    bool componentsAttached{};
+    std::uint64_t attachmentChanges{};
 };
 
 constexpr std::size_t movieRootValidationCacheSize = 8;
@@ -407,16 +411,31 @@ bool MovieRootRouteState::Route(
         functionHandler_.get()};
     validationEntry->coreModule.Update(validationContext);
     // ExamineMenu and PLM component shells may appear after an earlier lookup.
-    attachments_.ProbeComponents(movieRoot);
-    std::string_view lookupPath;
-    if (TryReadPath(path, lookupPath)) {
-        movieapi::NotifyLookup(validationContext, path);
+    // Once all of them are attached to this MovieRoot, probing does nothing
+    // until the change count moves. The count is read before probing, so a
+    // change made during the probe is seen on the next lookup. Callbacks run
+    // by the game during this lookup can reuse the entry for another MovieRoot.
+    const auto isEntryOwner = [this, validationEntry, movieRoot] {
+        return validationEntry->routeGeneration == validationGeneration_ &&
+            validationEntry->movieRoot == movieRoot;
+    };
+    const auto attachmentChanges = attachments_.AttachmentChangeCount();
+    if (!isEntryOwner() || !validationEntry->componentsAttached ||
+        validationEntry->attachmentChanges != attachmentChanges) {
+        const bool componentsAttached =
+            attachments_.ProbeComponents(movieRoot);
+        if (isEntryOwner()) {
+            validationEntry->componentsAttached = componentsAttached;
+            validationEntry->attachmentChanges = attachmentChanges;
+        }
     }
 
     std::string_view requestedPath;
-    const bool routedPath = (path[0] == 'r' || path[0] == '_') &&
-        TryReadPath(path, requestedPath);
-    if (!routedPath) {
+    if (!TryReadPath(path, requestedPath)) {
+        return originalResult;
+    }
+    movieapi::NotifyLookup(validationContext, path);
+    if (requestedPath[0] != 'r' && requestedPath[0] != '_') {
         return originalResult;
     }
 

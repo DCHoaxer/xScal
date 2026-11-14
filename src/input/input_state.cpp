@@ -144,15 +144,54 @@ LRESULT CALLBACK SubclassInstallHook(
             0x8000U) != 0;
 }
 
+// Plugins check many keys and button combinations in one frame. The
+// foreground and gamepad queries below reuse their result on the calling
+// thread for this long, which is shorter than a frame, so each frame still
+// reads new state.
+constexpr LONGLONG kPollReuseMicroseconds = 1'000;
+
+[[nodiscard]] LONGLONG ReadPerformanceCounter() noexcept {
+    LARGE_INTEGER counter{};
+    (void)::QueryPerformanceCounter(&counter);
+    return counter.QuadPart;
+}
+
+[[nodiscard]] bool IsPollRecent(
+    bool polled,
+    LONGLONG polledAt,
+    LONGLONG now) noexcept {
+    static const LONGLONG reuseTicks = [] {
+        LARGE_INTEGER frequency{};
+        (void)::QueryPerformanceFrequency(&frequency);
+        return frequency.QuadPart * kPollReuseMicroseconds / 1'000'000;
+    }();
+    return polled && now >= polledAt && now - polledAt < reuseTicks;
+}
+
+struct ForegroundPoll final {
+    LONGLONG polledAt{};
+    bool polled{};
+    bool foreground{};
+};
+
+thread_local ForegroundPoll lastForegroundPoll{};
+
 [[nodiscard]] bool IsCurrentProcessForeground() noexcept {
-    const HWND foregroundWindow = ::GetForegroundWindow();
-    if (foregroundWindow == nullptr) {
-        return false;
+    const LONGLONG now = ReadPerformanceCounter();
+    auto& poll = lastForegroundPoll;
+    if (IsPollRecent(poll.polled, poll.polledAt, now)) {
+        return poll.foreground;
     }
 
-    DWORD processId{};
-    (void)::GetWindowThreadProcessId(foregroundWindow, &processId);
-    return processId == ::GetCurrentProcessId();
+    bool foreground = false;
+    const HWND foregroundWindow = ::GetForegroundWindow();
+    if (foregroundWindow != nullptr) {
+        DWORD processId{};
+        (void)::GetWindowThreadProcessId(foregroundWindow, &processId);
+        foreground = processId == ::GetCurrentProcessId();
+    }
+    poll = {now, true, foreground};
+    return foreground;
 }
 
 [[nodiscard]] void* QueryTextInputWindow() noexcept {
@@ -209,14 +248,49 @@ LRESULT CALLBACK SubclassInstallHook(
         : 1);
 }
 
-[[nodiscard]] bool QueryGamepadState(
-    std::uint32_t userIndex,
-    InputState::GamepadSnapshot& snapshot) noexcept {
-    // The hook replaces the game's import slot, so this call reads the
-    // physical state.
-    snapshot = {};
+struct XInputPoll final {
+    LONGLONG polledAt{};
+    bool polled{};
+    bool connected{};
     XINPUT_STATE state{};
-    if (::XInputGetState(userIndex, &state) != ERROR_SUCCESS) {
+};
+
+struct GamepadPoll final {
+    LONGLONG polledAt{};
+    bool polled{};
+    bool found{};
+    InputState::GamepadSnapshot snapshot{};
+};
+
+// The HID slot of a pad depends on every lower XInput index, and polls of
+// disconnected indices are the slow ones, so each index is polled once per
+// reuse interval.
+thread_local std::array<XInputPoll, XUSER_MAX_COUNT> xinputPolls{};
+thread_local std::array<GamepadPoll, XUSER_MAX_COUNT> gamepadPolls{};
+
+[[nodiscard]] const XInputPoll& PollXInput(
+    DWORD userIndex,
+    LONGLONG now) noexcept {
+    auto& poll = xinputPolls[userIndex];
+    if (!IsPollRecent(poll.polled, poll.polledAt, now)) {
+        // The hook replaces the game's import slot, so this call reads the
+        // physical state.
+        poll.state = {};
+        poll.connected =
+            ::XInputGetState(userIndex, &poll.state) == ERROR_SUCCESS;
+        poll.polledAt = now;
+        poll.polled = true;
+    }
+    return poll;
+}
+
+[[nodiscard]] bool ReadGamepadState(
+    DWORD userIndex,
+    LONGLONG now,
+    InputState::GamepadSnapshot& snapshot) noexcept {
+    snapshot = {};
+    const XInputPoll& poll = PollXInput(userIndex, now);
+    if (!poll.connected) {
         // HID gamepads take the indices XInput leaves empty, in the order
         // they were opened. Gamepad suppression filters only the game's
         // XInput calls, so it has no effect on these indices.
@@ -226,23 +300,43 @@ LRESULT CALLBACK SubclassInstallHook(
         }
         std::size_t padIndex{};
         for (DWORD lowerIndex = 0; lowerIndex < userIndex; ++lowerIndex) {
-            XINPUT_STATE lowerState{};
-            if (::XInputGetState(lowerIndex, &lowerState) != ERROR_SUCCESS) {
+            if (!PollXInput(lowerIndex, now).connected) {
                 ++padIndex;
             }
         }
         return padIndex < hidGamepadCount &&
             ReadHidGamepadState(padIndex, snapshot);
     }
-    snapshot.buttons = state.Gamepad.wButtons;
-    snapshot.leftTrigger = state.Gamepad.bLeftTrigger;
-    snapshot.rightTrigger = state.Gamepad.bRightTrigger;
-    snapshot.leftX = state.Gamepad.sThumbLX;
-    snapshot.leftY = state.Gamepad.sThumbLY;
-    snapshot.rightX = state.Gamepad.sThumbRX;
-    snapshot.rightY = state.Gamepad.sThumbRY;
+    const XINPUT_GAMEPAD& gamepad = poll.state.Gamepad;
+    snapshot.buttons = gamepad.wButtons;
+    snapshot.leftTrigger = gamepad.bLeftTrigger;
+    snapshot.rightTrigger = gamepad.bRightTrigger;
+    snapshot.leftX = gamepad.sThumbLX;
+    snapshot.leftY = gamepad.sThumbLY;
+    snapshot.rightX = gamepad.sThumbRX;
+    snapshot.rightY = gamepad.sThumbRY;
     snapshot.connected = true;
     return true;
+}
+
+[[nodiscard]] bool QueryGamepadState(
+    std::uint32_t userIndex,
+    InputState::GamepadSnapshot& snapshot) noexcept {
+    snapshot = {};
+    // InputState passes only indices below its gamepad count, which is
+    // XUSER_MAX_COUNT.
+    if (userIndex >= gamepadPolls.size()) {
+        return false;
+    }
+    const LONGLONG now = ReadPerformanceCounter();
+    auto& poll = gamepadPolls[userIndex];
+    if (!IsPollRecent(poll.polled, poll.polledAt, now)) {
+        poll.found = ReadGamepadState(userIndex, now, poll.snapshot);
+        poll.polledAt = now;
+        poll.polled = true;
+    }
+    snapshot = poll.snapshot;
+    return poll.found;
 }
 
 }
@@ -645,6 +739,26 @@ bool InputState::FilterKeyboardMessage(
     unsigned int message,
     std::uintptr_t wParam,
     std::intptr_t lParam) noexcept {
+    // Every message sent to the game window passes through here. The function
+    // reads or changes state only for these, so others skip mutex_.
+    switch (message) {
+        case WM_KEYDOWN:
+        case WM_KEYUP:
+        case WM_CHAR:
+        case WM_DEADCHAR:
+        case WM_SYSKEYDOWN:
+        case WM_SYSKEYUP:
+        case WM_SYSCHAR:
+        case WM_SYSDEADCHAR:
+        case WM_UNICHAR:
+        case WM_INPUT:
+        case WM_KILLFOCUS:
+        case WM_ACTIVATEAPP:
+        case WM_NCDESTROY:
+            break;
+        default:
+            return false;
+    }
     std::scoped_lock lock{mutex_};
     const auto key = static_cast<std::uint8_t>(wParam & 0xFFU);
     if (message == WM_KILLFOCUS || message == WM_NCDESTROY ||

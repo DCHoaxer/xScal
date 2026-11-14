@@ -25,6 +25,28 @@ namespace {
     return length < maximumLength;
 }
 
+constexpr std::size_t kCStringStackLimit = 1024;
+
+// Same contract as MeasureBoundedCString, but each byte is also stored in
+// buffer, which must hold at least maximumLength bytes.
+[[nodiscard]] bool CopyBoundedCStringToBuffer(
+    const char* value,
+    std::size_t maximumLength,
+    char* buffer,
+    std::size_t& length) noexcept {
+    length = 0;
+    __try {
+        while (length < maximumLength && value[length] != 0) {
+            buffer[length] = value[length];
+            ++length;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        length = 0;
+        return false;
+    }
+    return length < maximumLength;
+}
+
 }
 
 bool TryAddAddress(
@@ -136,6 +158,23 @@ bool CopyBoundedCString(
     }
 
     std::size_t length{};
+    if (maximumLength <= kCStringStackLimit) {
+        // Short strings are copied while they are measured, so the game
+        // memory is read once instead of twice.
+        char buffer[kCStringStackLimit];
+        if (!CopyBoundedCStringToBuffer(value, maximumLength, buffer, length) ||
+            (!allowEmpty && length == 0)) {
+            return false;
+        }
+        try {
+            destination.assign(buffer, length);
+        } catch (...) {
+            destination.clear();
+            return false;
+        }
+        return true;
+    }
+
     if (!MeasureBoundedCString(value, maximumLength, length) ||
         (!allowEmpty && length == 0)) {
         return false;
@@ -170,8 +209,9 @@ bool ValidateVtable(
     }
 
     std::uintptr_t firstVirtualFunction{};
-    return ReadBytes(
-               virtualQuery,
+    // The region query above already showed the slot is committed and
+    // readable, so ReadBytes would only repeat it.
+    return TryCopyBytes(
                vtable,
                &firstVirtualFunction,
                sizeof(firstVirtualFunction)) &&

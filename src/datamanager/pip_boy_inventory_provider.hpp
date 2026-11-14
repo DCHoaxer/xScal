@@ -48,6 +48,10 @@ private:
     std::string lastJson_;
     std::uint64_t lastFingerprint_{};
     std::uint64_t lastBuildTick_{};
+    // When the item list was last hashed or read. Requests within
+    // JsonResultCache::kFreshnessMilliseconds of it get lastJson_ without
+    // hashing the list again.
+    std::uint64_t lastCheckTick_{};
 };
 
 }

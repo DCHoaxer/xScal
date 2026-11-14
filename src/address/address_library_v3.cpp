@@ -375,9 +375,10 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
     if (!ReadList(root, "messages", "messages", kMaximumMessages, list, detail)) {
         return false;
     }
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
+    auto messageItems = list.Items();
+    for (json::Value item; messageItems.Next(item);) {
         Message message;
-        if (!ParseMessage(list.ArrayItem(index), message, detail)) {
+        if (!ParseMessage(item, message, detail)) {
             return false;
         }
         messages.push_back(std::move(message));
@@ -450,9 +451,10 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
     if (!ReadList(object, name, label, kMaximumListEntries, list, detail)) {
         return false;
     }
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
+    auto idItems = list.Items();
+    for (json::Value item; idItems.Next(item);) {
         std::string_view id;
-        if (!list.ArrayItem(index).ReadString(id) || !IsMessageId(id)) {
+        if (!item.ReadString(id) || !IsMessageId(id)) {
             detail = label;
             return false;
         }
@@ -524,8 +526,8 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
     json::Value list;
     if (object.FindMember("databases")) {
         if (!ReadList(object, "databases", "builds[].databases", kMaximumDatabases, list, detail)) return false;
-        for (std::size_t index = 0; index < list.ArraySize(); ++index) {
-            const json::Value item = list.ArrayItem(index);
+        auto databaseItems = list.Items();
+        for (json::Value item; databaseItems.Next(item);) {
             DatabaseEntry entry;
             if (item.GetType() != json::Type::Object) {
                 detail = "builds[].databases[]";
@@ -536,8 +538,8 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
         }
     }
     if (!ReadList(object, "blockedRevisions", "builds[].blockedRevisions", kMaximumListEntries, list, detail)) return false;
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
-        const json::Value item = list.ArrayItem(index);
+    auto blockedItems = list.Items();
+    for (json::Value item; blockedItems.Next(item);) {
         BlockedRevision blocked;
         if (item.GetType() != json::Type::Object ||
             !ReadText(item, "release", "builds[].blockedRevisions[].release", 16, text, detail)) {
@@ -554,8 +556,9 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
         build.blockedRevisions.push_back(std::move(blocked));
     }
     if (!ReadList(object, "messageIds", "builds[].messageIds", kMaximumListEntries, list, detail)) return false;
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
-        if (!list.ArrayItem(index).ReadString(text) || !IsMessageId(text)) {
+    auto messageIdItems = list.Items();
+    for (json::Value item; messageIdItems.Next(item);) {
+        if (!item.ReadString(text) || !IsMessageId(text)) {
             detail = "builds[].messageIds[]";
             return false;
         }
@@ -593,9 +596,10 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
     if (!ReadList(root, "builds", "builds", kMaximumBuilds, list, detail)) {
         return false;
     }
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
+    auto buildItems = list.Items();
+    for (json::Value item; buildItems.Next(item);) {
         Build build;
-        if (!ParseBuild(list.ArrayItem(index), build, detail)) {
+        if (!ParseBuild(item, build, detail)) {
             return false;
         }
         status.builds.push_back(std::move(build));
@@ -610,8 +614,8 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
     if (!ReadList(root, "developers", "developers", kMaximumListEntries, list, detail)) {
         return false;
     }
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
-        const json::Value item = list.ArrayItem(index);
+    auto developerItems = list.Items();
+    for (json::Value item; developerItems.Next(item);) {
         std::string_view value;
         if (item.GetType() != json::Type::Object) {
             detail = "developers[]";
@@ -660,8 +664,8 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
         return false;
     }
     std::string_view value;
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
-        const json::Value item = list.ArrayItem(index);
+    auto revokedDeveloperItems = list.Items();
+    for (json::Value item; revokedDeveloperItems.Next(item);) {
         DeveloperRevocation developer;
         if (item.GetType() != json::Type::Object) {
             detail = "developers[]";
@@ -680,8 +684,8 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
     if (!ReadList(root, "pluginHashes", "pluginHashes", kMaximumListEntries, list, detail)) {
         return false;
     }
-    for (std::size_t index = 0; index < list.ArraySize(); ++index) {
-        const json::Value item = list.ArrayItem(index);
+    auto hashItems = list.Items();
+    for (json::Value item; hashItems.Next(item);) {
         HashRevocation entry;
         if (item.GetType() != json::Type::Object) {
             detail = "pluginHashes[]";
@@ -768,7 +772,6 @@ constexpr wchar_t kRevocationsFile[] = L"Data\\XSCAL\\AddressLibrary\\v3-revocat
 [[nodiscard]] bool ReadCacheFile(const wchar_t* relative, std::string& text) noexcept {
     platform::ExecutableRelativePath path;
     return ResolveCachePath(relative, path) &&
-        platform::QueryFilePresence(path) == platform::FilePresence::Present &&
         platform::ReadBoundedFile(path, kMaximumFileSize, text);
 }
 
@@ -816,6 +819,93 @@ BOOL CALLBACK LoadRevocationsOnce(PINIT_ONCE, PVOID, PVOID*) noexcept {
         return -1;
     }
     return 0;
+}
+
+// One startup reads the cached status file from the message check, the update
+// check, the interval lookup and the build lookup. Each read decodes base64,
+// verifies the signature and parses JSON, so the accepted (or rejected) result
+// is kept and reused while the file's size and write time stay the same. A
+// store through this file clears it.
+struct CacheFileKey final {
+    std::uint64_t writeTime{};
+    std::uint64_t size{};
+
+    [[nodiscard]] bool operator==(const CacheFileKey&) const noexcept = default;
+};
+
+template <class T>
+struct ParsedCacheFile final {
+    SRWLOCK lock = SRWLOCK_INIT;
+    bool filled{};
+    CacheFileKey key{};
+    bool accepted{};
+    T value{};
+};
+
+ParsedCacheFile<Status> statusCache;
+ParsedCacheFile<Revocations> revocationsCache;
+
+[[nodiscard]] bool QueryCacheFileKey(const wchar_t* relative, CacheFileKey& key) noexcept {
+    platform::ExecutableRelativePath path;
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!ResolveCachePath(relative, path) ||
+        !::GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
+        return false;
+    }
+    key.writeTime = (static_cast<std::uint64_t>(data.ftLastWriteTime.dwHighDateTime) << 32) |
+        data.ftLastWriteTime.dwLowDateTime;
+    key.size = (static_cast<std::uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+    return true;
+}
+
+// parse(text, value) returns true when the file content is accepted and logs
+// the reason when it is not.
+template <class T, class Parse>
+[[nodiscard]] bool LoadCachedFile(
+    const wchar_t* relative,
+    ParsedCacheFile<T>& cache,
+    T& out,
+    Parse parse) noexcept {
+    out = {};
+    CacheFileKey key;
+    const bool hasKey = QueryCacheFileKey(relative, key);
+    ::AcquireSRWLockExclusive(&cache.lock);
+    bool accepted = false;
+    try {
+        if (hasKey && cache.filled && cache.key == key) {
+            accepted = cache.accepted;
+            if (accepted) {
+                out = cache.value;
+            }
+        } else {
+            std::string text;
+            if (ReadCacheFile(relative, text)) {
+                T parsed{};
+                accepted = parse(text, parsed);
+                cache.filled = hasKey;
+                cache.key = key;
+                cache.accepted = accepted;
+                cache.value = accepted ? parsed : T{};
+                if (accepted) {
+                    out = std::move(parsed);
+                }
+            } else {
+                cache.filled = false;
+            }
+        }
+    } catch (...) {
+        cache.filled = false;
+        accepted = false;
+        out = {};
+    }
+    ::ReleaseSRWLockExclusive(&cache.lock);
+    return accepted;
+}
+
+void ClearParsedCacheFile(auto& cache) noexcept {
+    ::AcquireSRWLockExclusive(&cache.lock);
+    cache.filled = false;
+    ::ReleaseSRWLockExclusive(&cache.lock);
 }
 
 }  // namespace
@@ -1137,50 +1227,41 @@ bool BuildMessageText(
 }
 
 bool LoadCachedStatus(Status& status) noexcept {
-    status = {};
-    try {
-        std::string text;
-        RawPart part;
-        const char* detail = nullptr;
-        if (!ReadCacheFile(kStatusFile, text)) {
-            return false;
-        }
-        if (!ParsePartFile(text, false, part, detail) ||
-            CheckStatusPart(part, 0, status, detail) != PartCheck::Accepted) {
-            DiagnosticLogFormat("Address Library: cached v3-status.json ignored (%s)", detail);
-            status = {};
-            return false;
-        }
-        return true;
-    } catch (...) {
-        status = {};
-        return false;
-    }
+    return LoadCachedFile(
+        kStatusFile,
+        statusCache,
+        status,
+        [](const std::string& text, Status& parsed) {
+            RawPart part;
+            const char* detail = nullptr;
+            if (!ParsePartFile(text, false, part, detail) ||
+                CheckStatusPart(part, 0, parsed, detail) != PartCheck::Accepted) {
+                DiagnosticLogFormat("Address Library: cached v3-status.json ignored (%s)", detail);
+                return false;
+            }
+            return true;
+        });
 }
 
 bool LoadCachedRevocations(Revocations& revocations) noexcept {
-    revocations = {};
-    try {
-        std::string text;
-        RawPart part;
-        const char* detail = nullptr;
-        if (!ReadCacheFile(kRevocationsFile, text)) {
-            return false;
-        }
-        if (!ParsePartFile(text, true, part, detail) ||
-            CheckRevocationsPart(part, 0, revocations, detail) != PartCheck::Accepted) {
-            DiagnosticLogFormat("Address Library: cached v3-revocations.json ignored (%s)", detail);
-            revocations = {};
-            return false;
-        }
-        return true;
-    } catch (...) {
-        revocations = {};
-        return false;
-    }
+    return LoadCachedFile(
+        kRevocationsFile,
+        revocationsCache,
+        revocations,
+        [](const std::string& text, Revocations& parsed) {
+            RawPart part;
+            const char* detail = nullptr;
+            if (!ParsePartFile(text, true, part, detail) ||
+                CheckRevocationsPart(part, 0, parsed, detail) != PartCheck::Accepted) {
+                DiagnosticLogFormat("Address Library: cached v3-revocations.json ignored (%s)", detail);
+                return false;
+            }
+            return true;
+        });
 }
 
 bool StoreStatusPart(const RawPart& part) noexcept {
+    ClearParsedCacheFile(statusCache);
     try {
         return WriteCacheFile(kStatusFile, SerializePart(part, false));
     } catch (...) {
@@ -1189,6 +1270,7 @@ bool StoreStatusPart(const RawPart& part) noexcept {
 }
 
 bool StoreRevocationsPart(const RawPart& part) noexcept {
+    ClearParsedCacheFile(revocationsCache);
     try {
         return WriteCacheFile(kRevocationsFile, SerializePart(part, true));
     } catch (...) {

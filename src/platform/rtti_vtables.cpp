@@ -231,12 +231,19 @@ using RegionScan = bool (*)(
         for (auto address = AlignUp(begin, alignof(std::uint32_t));
              address < end && end - address >= sizeof(CompleteObjectLocator);
              address += alignof(std::uint32_t)) {
+            // Almost every word is not 1, so the rest of the structure is
+            // only copied for a signature match.
+            std::uint32_t signature;
+            std::memcpy(
+                &signature, reinterpret_cast<const void*>(address), sizeof(signature));
+            if (signature != kLocatorSignatureX64) {
+                continue;
+            }
             CompleteObjectLocator locator;
             std::memcpy(
                 &locator, reinterpret_cast<const void*>(address), sizeof(locator));
             const auto rva = address - state.moduleBase;
-            if (locator.signature != kLocatorSignatureX64 ||
-                locator.self != rva) {
+            if (locator.self != rva) {
                 continue;
             }
             for (std::size_t query = 0; query < state.count; ++query) {
@@ -261,18 +268,43 @@ using RegionScan = bool (*)(
     std::uintptr_t begin,
     std::uintptr_t end,
     ScanState& state) noexcept {
+    // The locator counts do not change during this pass, so the queries that
+    // can still match are picked once instead of at every slot.
+    std::array<std::uint64_t, kMaximumRttiVtableQueries> locatorAddresses;
+    std::array<std::size_t, kMaximumRttiVtableQueries> candidateQueries;
+    std::size_t candidateCount = 0;
+    std::uint64_t lowest = (std::numeric_limits<std::uint64_t>::max)();
+    std::uint64_t highest = 0;
+    for (std::size_t query = 0; query < state.count; ++query) {
+        const auto& matches = state.matches[query];
+        if (matches.locatorCount != 1) {
+            continue;
+        }
+        const std::uint64_t address = state.moduleBase + matches.locatorRva;
+        locatorAddresses[candidateCount] = address;
+        candidateQueries[candidateCount] = query;
+        ++candidateCount;
+        lowest = (std::min)(lowest, address);
+        highest = (std::max)(highest, address);
+    }
+    if (candidateCount == 0) {
+        return true;
+    }
+
     __try {
         for (auto slot = AlignUp(begin, alignof(std::uint64_t));
              slot < end && end - slot >= sizeof(std::uint64_t);
              slot += alignof(std::uint64_t)) {
             std::uint64_t value;
             std::memcpy(&value, reinterpret_cast<const void*>(slot), sizeof(value));
-            for (std::size_t query = 0; query < state.count; ++query) {
-                auto& matches = state.matches[query];
-                if (matches.locatorCount != 1 ||
-                    value != state.moduleBase + matches.locatorRva) {
+            if (value < lowest || value > highest) {
+                continue;
+            }
+            for (std::size_t candidate = 0; candidate < candidateCount; ++candidate) {
+                if (value != locatorAddresses[candidate]) {
                     continue;
                 }
+                auto& matches = state.matches[candidateQueries[candidate]];
                 matches.vtableRva =
                     slot + sizeof(std::uint64_t) - state.moduleBase;
                 ++matches.vtableCount;

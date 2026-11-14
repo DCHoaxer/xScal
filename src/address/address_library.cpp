@@ -110,7 +110,6 @@ bool ReadMarker(
     std::string& text) noexcept {
     platform::ExecutableRelativePath path;
     return ResolveFilePath(target, runtime, extension, path) &&
-        platform::QueryFilePresence(path) == platform::FilePresence::Present &&
         platform::ReadBoundedFile(path, kMarkerSize, text);
 }
 
@@ -346,17 +345,13 @@ LoadStatus Library::Load(
     if (!ResolveFilePath(target, runtime, L"bin", path)) {
         return LoadStatus::ReadFailed;
     }
-    const auto presence = platform::QueryFilePresence(path);
-    if (presence == platform::FilePresence::Missing) {
-        return LoadStatus::Missing;
-    }
-    if (presence != platform::FilePresence::Present) {
-        return LoadStatus::ReadFailed;
-    }
-
     std::string contents;
     if (!platform::ReadBoundedFile(path, kMaximumDatabaseSize, contents)) {
-        return LoadStatus::ReadFailed;
+        // The presence query only runs after a failed read, to tell a missing
+        // file from an unreadable one.
+        return platform::QueryFilePresence(path) == platform::FilePresence::Missing
+            ? LoadStatus::Missing
+            : LoadStatus::ReadFailed;
     }
     return Parse(contents, target, runtime, executable, moduleBase);
 }

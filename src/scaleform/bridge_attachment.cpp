@@ -8,6 +8,7 @@
 #include "scaleform/scaleform_layout.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -41,6 +42,21 @@ constexpr std::array<DefaultComponentPath, 4> kDefaultComponentPaths{
     }
     return true;
 }
+
+std::atomic<std::uint64_t> nextServiceId{1};
+
+// The last bridge this thread saw ready. Lookups of an __SFCodeObj alias
+// repeat the same bridge, and this entry lets them skip mutex_ and the
+// attachedCalls_ scan.
+struct ReadyBridge final {
+    std::uint64_t serviceId{};
+    std::uint64_t attachmentChanges{};
+    void* movieRoot{};
+    NativeCallIdentity bridge{};
+    NativeBridgeAttachmentState attachment{};
+};
+
+thread_local ReadyBridge lastReadyBridge{};
 
 [[nodiscard]] bool IsCreatedObjectValue(
     const ScaleformValue& value) noexcept {
@@ -334,7 +350,8 @@ BridgeAttachmentService::BridgeAttachmentService(
     : original_{original},
       api_{api},
       functionHandler_{functionHandler},
-      targetKind_{targetKind} {
+      targetKind_{targetKind},
+      serviceId_{nextServiceId.fetch_add(1, std::memory_order_relaxed)} {
     const auto addPath = [this](
                              std::string_view path,
                              bool probeOnLookup) {
@@ -455,6 +472,23 @@ void BridgeAttachmentService::ForgetRootAttachments(void* movieRoot) noexcept {
         ForgetComponent(components_[index], movieRoot);
     }
     modstorage::GlobalService().ForgetMovie(movieRoot);
+    attachmentChanges_.fetch_add(1, std::memory_order_release);
+}
+
+void BridgeAttachmentService::RememberComponentRoot(
+    ComponentAttachments& componentState,
+    void* movieRoot) noexcept {
+    ForgetProbe(componentState.probes, componentState.probeCount, movieRoot);
+    void* evicted{};
+    if (componentState.roots.Insert(movieRoot, &evicted) &&
+        evicted != nullptr) {
+        // The evicted MovieRoot is probed again on its next lookup.
+        attachmentChanges_.fetch_add(1, std::memory_order_release);
+    }
+}
+
+std::uint64_t BridgeAttachmentService::AttachmentChangeCount() const noexcept {
+    return attachmentChanges_.load(std::memory_order_acquire);
 }
 
 void BridgeAttachmentService::RememberRoot(void* movieRoot) noexcept {
@@ -500,21 +534,69 @@ BridgeAttachmentResult BridgeAttachmentService::Attach(
     if (!result.attachment.call.IsValid()) {
         return result;
     }
+    // Only real changes are counted: a lookup of an unchanged bridge must not
+    // drop other threads' ReadyBridge entries.
     if (known == attachedCalls_.end()) {
         (void)attachedCalls_.Insert({
             context.movieRoot,
             bridgeInfo.objectInterface,
             bridgeInfo.data,
             result.attachment});
-    } else {
+        attachmentChanges_.fetch_add(1, std::memory_order_release);
+    } else if (known->attachment != result.attachment) {
         known->attachment = result.attachment;
+        attachmentChanges_.fetch_add(1, std::memory_order_release);
     }
     return result;
+}
+
+bool BridgeAttachmentService::ReadKnownReadyBridge(
+    void* movieRoot,
+    ScaleformValue& bridge,
+    BridgeAttachmentResult& result) noexcept {
+    const ReadyBridge known = lastReadyBridge;
+    if (movieRoot == nullptr || known.serviceId != serviceId_ ||
+        known.movieRoot != movieRoot ||
+        known.attachmentChanges !=
+            attachmentChanges_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const auto bridgeInfo = InspectScaleformValue(bridge);
+    if (NativeCallIdentity{bridgeInfo.objectInterface, bridgeInfo.data} !=
+            known.bridge ||
+        (chat::IsChatInterfaceAvailable() && !known.attachment.chatReady)) {
+        return false;
+    }
+
+    // Same check as AttachBridgeMembers: script code can replace call() or
+    // the bridge can be a new object at the old address. Reading the member
+    // touches no service state, so mutex_ is not needed for it.
+    auto context = Context(movieRoot);
+    ScaleformValue call{};
+    const bool callReadable =
+        GetScaleformMember(context, bridge, "call", call);
+    const auto callInfo = InspectScaleformValue(call);
+    const bool callAttached = callReadable &&
+        IsObjectLikeScaleformValue(call) &&
+        NativeCallIdentity{callInfo.objectInterface, callInfo.data} ==
+            known.attachment.call;
+    ReleaseValue(context, call);
+    if (!callAttached) {
+        return false;
+    }
+    result = {};
+    result.attachment = known.attachment;
+    result.ready = true;
+    return true;
 }
 
 BridgeAttachmentResult BridgeAttachmentService::AttachResolved(
     void* movieRoot,
     ScaleformValue& bridge) noexcept {
+    BridgeAttachmentResult knownResult{};
+    if (ReadKnownReadyBridge(movieRoot, bridge, knownResult)) {
+        return knownResult;
+    }
     std::unique_lock lock{mutex_, std::try_to_lock};
     if (!lock.owns_lock()) {
         BridgeAttachmentResult contendedResult{};
@@ -525,7 +607,17 @@ BridgeAttachmentResult BridgeAttachmentService::AttachResolved(
         return {};
     }
     auto context = Context(movieRoot);
-    return Attach(context, bridge, nullptr);
+    const auto result = Attach(context, bridge, nullptr);
+    if (result.ready) {
+        const auto bridgeInfo = InspectScaleformValue(bridge);
+        lastReadyBridge = {
+            serviceId_,
+            attachmentChanges_.load(std::memory_order_relaxed),
+            movieRoot,
+            {bridgeInfo.objectInterface, bridgeInfo.data},
+            result.attachment};
+    }
+    return result;
 }
 
 bool BridgeAttachmentService::AttachChatInterface(
@@ -651,9 +743,7 @@ void BridgeAttachmentService::AttachConfiguredComponent(
             }
             auto context = Context(movieRoot);
             if (AttachComponent(context, *resolvedComponent, nullptr)) {
-                ForgetProbe(
-                    component.probes, component.probeCount, movieRoot);
-                (void)component.roots.Insert(movieRoot);
+                RememberComponentRoot(component, movieRoot);
             }
             return;
         }
@@ -671,19 +761,23 @@ void BridgeAttachmentService::AttachConfiguredComponent(
     }
 }
 
-void BridgeAttachmentService::ProbeComponents(void* movieRoot) noexcept {
+bool BridgeAttachmentService::ProbeComponents(void* movieRoot) noexcept {
     std::unique_lock lock{mutex_, std::try_to_lock};
     if (!lock.owns_lock()) {
-        return;
+        return false;
     }
+    bool componentsAttached = true;
     for (std::size_t index = 0; index < componentCount_; ++index) {
         auto& component = components_[index];
         if (!component.probeOnLookup) {
             continue;
         }
-        (void)AttachNamedComponent(
-            movieRoot, false, component.path.data(), component);
+        if (!AttachNamedComponent(
+                movieRoot, false, component.path.data(), component)) {
+            componentsAttached = false;
+        }
     }
+    return componentsAttached;
 }
 
 bool BridgeAttachmentService::AttachNamedComponent(
@@ -712,8 +806,7 @@ bool BridgeAttachmentService::AttachNamedComponent(
         AttachComponent(context, component, componentPath);
     ReleaseValue(context, component);
     if (ready) {
-        ForgetProbe(componentState.probes, componentState.probeCount, movieRoot);
-        (void)componentState.roots.Insert(movieRoot);
+        RememberComponentRoot(componentState, movieRoot);
     }
     return ready;
 }

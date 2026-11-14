@@ -54,6 +54,7 @@ set(XSCAL_CORE_SOURCES
     src/address/address_library_v3.cpp
     src/archive/archive_stream_hook.cpp
     src/common/json.cpp
+    src/api/json_interface.cpp
     src/api/mod_storage.cpp
     src/api/file_command_service.cpp
     src/api/game_objects.cpp
@@ -163,11 +164,12 @@ target_compile_definitions(dxgi PRIVATE
     NOMINMAX
     _USE_STD_VECTOR_ALGORITHMS=0
     yyjson_inline=inline
-    YYJSON_DISABLE_FAST_FP_CONV=1
+    # The plugin JSON interface (src/api/json_interface.cpp) needs the writer
+    # and the comment, trailing comma and BOM reader options. The fast number
+    # conversion keeps written numbers the same as the plugins wrote them with
+    # their own yyjson copies.
     YYJSON_DISABLE_INCR_READER=1
-    YYJSON_DISABLE_NON_STANDARD=1
-    YYJSON_DISABLE_UTILS=1
-    YYJSON_DISABLE_WRITER=1)
+    YYJSON_DISABLE_UTILS=1)
 target_include_directories(dxgi PRIVATE
     src
     "${XSCAL_SDK_INCLUDE_DIR}"

@@ -77,11 +77,27 @@ public:
         if (!installed_) {
             return GameProviderRequestStatus::Inactive;
         }
-        if (cache_.TryCopyFresh(json)) {
-            return GameProviderRequestStatus::Delivered;
+        if (const auto hit = cache_.CopyFresh(json);
+            hit != JsonResultCache::Lookup::Miss) {
+            return hit == JsonResultCache::Lookup::Hit
+                ? GameProviderRequestStatus::Delivered
+                : GameProviderRequestStatus::SnapshotUnavailable;
+        }
+
+        // One build at a time: callers that missed together wait here and
+        // then read the result of the first build instead of each reading
+        // the game again.
+        std::scoped_lock buildLock{buildMutex_};
+        if (const auto hit = cache_.CopyFresh(json);
+            hit != JsonResultCache::Lookup::Miss) {
+            return hit == JsonResultCache::Lookup::Hit
+                ? GameProviderRequestStatus::Delivered
+                : GameProviderRequestStatus::SnapshotUnavailable;
         }
 
         if (!Slice::Build(runtime_, json)) {
+            json.clear();
+            cache_.StoreFailure();
             return GameProviderRequestStatus::SnapshotUnavailable;
         }
         cache_.Store(json);
@@ -91,6 +107,7 @@ public:
 private:
     platform::VirtualQueryFn virtualQuery_{};
     mutable std::shared_mutex lifecycleMutex_;
+    std::mutex buildMutex_;
     typename Slice::Runtime runtime_{};
     bool installed_{};
     JsonResultCache cache_;

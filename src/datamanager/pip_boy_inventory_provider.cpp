@@ -58,6 +58,7 @@ bool PipBoyInventoryProvider::Restore() noexcept {
     lastJson_.shrink_to_fit();
     lastFingerprint_ = 0;
     lastBuildTick_ = 0;
+    lastCheckTick_ = 0;
     return true;
 }
 
@@ -77,6 +78,16 @@ PipBoyInventoryRequestStatus PipBoyInventoryProvider::Request(
 
     std::scoped_lock lastJsonLock{lastJsonMutex_};
     const auto now = tick_();
+    if (!lastJson_.empty() &&
+        now - lastCheckTick_ < JsonResultCache::kFreshnessMilliseconds) {
+        try {
+            json = lastJson_;
+            return PipBoyInventoryRequestStatus::Delivered;
+        } catch (...) {
+            json.clear();
+            return PipBoyInventoryRequestStatus::SnapshotUnavailable;
+        }
+    }
     const bool canReuse = !lastJson_.empty() &&
         now - lastBuildTick_ < kMaximumReuseMilliseconds;
     std::string captured;
@@ -92,12 +103,17 @@ PipBoyInventoryRequestStatus PipBoyInventoryProvider::Request(
                 lastJson_ = std::move(captured);
                 lastFingerprint_ = fingerprint;
                 lastBuildTick_ = now;
+                lastCheckTick_ = now;
                 json = lastJson_;
                 return PipBoyInventoryRequestStatus::Delivered;
             case PipBoyInventoryCaptureResult::Unchanged:
             case PipBoyInventoryCaptureResult::LockBusy:
                 if (lastJson_.empty()) {
                     return PipBoyInventoryRequestStatus::SnapshotUnavailable;
+                }
+                // A busy lock is retried on the next request.
+                if (capture == PipBoyInventoryCaptureResult::Unchanged) {
+                    lastCheckTick_ = now;
                 }
                 json = lastJson_;
                 return PipBoyInventoryRequestStatus::Delivered;

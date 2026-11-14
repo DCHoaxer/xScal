@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <climits>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <vector>
 
 namespace sf::plugins::signing {
@@ -233,10 +235,20 @@ long HashFile(HANDLE file, std::uint64_t& size, Hash& hash) noexcept {
     if (status < 0)
         return status;
     size = 0;
-    std::uint8_t buffer[16384];
+    // Plugin DLLs are hashed at startup and can be megabytes; a larger buffer
+    // means fewer ReadFile calls. The stack buffer is the fallback when the
+    // allocation fails.
+    constexpr std::size_t kHeapBufferSize = 256 * 1024;
+    std::uint8_t stackBuffer[16384];
+    std::unique_ptr<std::uint8_t[]> heapBuffer{
+        new (std::nothrow) std::uint8_t[kHeapBufferSize]};
+    std::uint8_t* const buffer = heapBuffer ? heapBuffer.get() : stackBuffer;
+    const DWORD bufferSize = heapBuffer
+        ? static_cast<DWORD>(kHeapBufferSize)
+        : static_cast<DWORD>(sizeof(stackBuffer));
     for (;;) {
         DWORD read = 0;
-        if (!::ReadFile(file, buffer, sizeof(buffer), &read, nullptr)) {
+        if (!::ReadFile(file, buffer, bufferSize, &read, nullptr)) {
             status = StatusFromWin32(::GetLastError());
             break;
         }

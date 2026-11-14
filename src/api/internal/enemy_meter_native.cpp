@@ -64,7 +64,20 @@ struct NativeRuntime final {
     std::uintptr_t referenceControlVtable{};
     std::uintptr_t referenceDestroy{};
     bool active{};
+    // Last values the VATS collector returned, for the target handle and the
+    // object it resolved to. Zeroed with the rest of the state on configure
+    // and reset.
+    std::uint32_t cachedHandle{};
+    std::uintptr_t cachedTarget{};
+    ULONGLONG cachedTick{};
+    Resistances cachedValues{};
 };
+
+// xsGetEnemyMeterData can be called on every frame, and each read runs the
+// game's VATS collector. A cached result is used only for the same handle and
+// the same resolved object, so a new target is always read from the game; for
+// the same target the values are at most this old.
+constexpr ULONGLONG kResistanceCacheMilliseconds = 100;
 
 NativeRuntime runtime;
 std::mutex runtimeMutex;
@@ -303,6 +316,16 @@ void ReleaseTarget(
         return false;
     }
 
+    const ULONGLONG now = ::GetTickCount64();
+    if (state.cachedHandle == handle && state.cachedTarget == target &&
+        now - state.cachedTick < kResistanceCacheMilliseconds) {
+        values = state.cachedValues;
+        ReleaseTarget(state, target);
+        return true;
+    }
+    state.cachedHandle = 0;
+    state.cachedTarget = 0;
+
     std::uint8_t formType{};
     const bool actor =
         platform::TryCopyBytes(
@@ -320,6 +343,12 @@ void ReleaseTarget(
 
     const bool success = ReadStockVatsResistances(state, target, values);
     ReleaseTarget(state, target);
+    if (success) {
+        state.cachedHandle = handle;
+        state.cachedTarget = target;
+        state.cachedTick = now;
+        state.cachedValues = values;
+    }
     return success;
 }
 

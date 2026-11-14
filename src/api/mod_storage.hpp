@@ -47,17 +47,29 @@ public:
     void Clear() noexcept;
 
 private:
+    // copy holds the same text as document; it is moved into documents_ when
+    // the write is queued.
     [[nodiscard]] bool QueueWriteLocked(
         std::string_view name,
-        std::string_view document);
-    [[nodiscard]] bool LoadLocked(std::string_view name, std::string& document);
+        std::string_view document,
+        std::string&& copy);
+    // Copies the saved document of name into document while it is newer than
+    // the file. Erases the saved document once its write has succeeded.
+    [[nodiscard]] bool CopyNewerDocumentLocked(
+        std::string_view name,
+        std::string& document);
+    // True while a write of name is queued or executing, or the last one
+    // failed. Call with fileWriter_ attached.
+    [[nodiscard]] bool IsDocumentNewerLocked(std::string_view name);
+    void EraseWrittenDocumentsLocked();
 
     std::mutex mutex_;
     FileCommandService* fileWriter_{};
     std::unordered_map<void*, std::string> registrations_;
     // Latest saved document per storage name, capped at 256 names. Load uses an
-    // entry only while its file write is queued. Entries are not evicted until
-    // Clear().
+    // entry only while its file write is queued or after it failed. An entry
+    // whose write succeeded is erased by the next Load of its name, or when a
+    // save under a new name finds the cap reached.
     std::unordered_map<std::string, std::string> documents_;
 };
 

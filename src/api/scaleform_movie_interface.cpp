@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -139,9 +140,33 @@ std::atomic<std::uint32_t> invokeFilterCount{};
 std::mutex movieMutex;
 std::array<MovieRecord, kMaxMovies> movies;
 
+// Incremented whenever a movie record is cleared (with movieMutex held) and
+// whenever a MovieRoot address gets a new generation. A SettledMovie entry
+// stored under an older value may describe a movie that no longer exists.
+std::atomic<std::uint64_t> movieRecordEpoch{};
+
+// A movie whose record was loaded and matched against handlerCount movie
+// handlers, observed after movieRecordEpoch was read as epoch. While both
+// values are unchanged, DetectMovieLoad() and NotifyMovieLoaded() have nothing
+// to do for it, so AdvanceMovieVisitor() skips their locks and table scans.
+// Kept per thread so the entries need no lock; a stale entry costs one frame
+// on the locked path.
+struct SettledMovie final {
+    void* movieRoot{};
+    std::uint64_t epoch{};
+    std::uint32_t handlerCount{};
+};
+
+constexpr std::size_t kSettledMovieSlots = 16;
+thread_local std::array<SettledMovie, kSettledMovieSlots> settledMovies{};
+thread_local std::size_t nextSettledSlot{};
+
 std::mutex refMutex;
 std::array<RetainedRef, XSCAL_SCALEFORM_MOVIE_MAX_REFS> refs;
 std::atomic<std::uint32_t> liveRefCount{};
+// Retain() starts looking for a free slot here, after the slot it used last,
+// instead of scanning past every live ref from slot 0. Read with refMutex held.
+std::size_t nextRefSlot{};
 
 // postedCount lets the AdvanceFrame hook skip the lock while the queue is empty.
 std::mutex postMutex;
@@ -151,8 +176,9 @@ std::atomic<std::uint32_t> postedCount{};
 
 // Number of movies destroyed at each MovieRoot address. MovieIdentity() puts
 // it in the high 16 bits, which are zero in x64 user-mode addresses, so a
-// movie created at a reused address gets a new identity.
-std::mutex generationMutex;
+// movie created at a reused address gets a new identity. Shared lock for
+// readers: every frame and most plugin calls read it, only ForgetMovie() writes.
+std::shared_mutex generationMutex;
 std::unordered_map<void*, std::uint16_t> movieGenerations;
 
 constexpr std::uintptr_t kIdentityAddressMask = (std::uintptr_t{1} << 48) - 1;
@@ -223,10 +249,20 @@ void CopyText(char* destination, std::size_t capacity, std::string_view text) no
     destination[length] = '\0';
 }
 
+// The part of a movie URL after the last '/' or '\', which swfName filters
+// compare against.
+[[nodiscard]] std::string_view SwfFileName(std::string_view url) noexcept {
+    const auto separator = url.find_last_of("/\\");
+    if (separator != std::string_view::npos) {
+        url.remove_prefix(separator + 1);
+    }
+    return url;
+}
+
 [[nodiscard]] std::uintptr_t MakeIdentity(void* movieRoot) noexcept {
     std::uint16_t generation{};
     {
-        std::scoped_lock lock{generationMutex};
+        std::shared_lock lock{generationMutex};
         const auto found = movieGenerations.find(movieRoot);
         if (found != movieGenerations.end()) {
             generation = found->second;
@@ -941,6 +977,7 @@ uintptr_t __cdecl ObjectIdentity(const XScalMovieValue* value) noexcept {
             return record;
         }
         *record = {};
+        movieRecordEpoch.fetch_add(1, std::memory_order_release);
         record->movieRoot = movieRoot;
         record->identity = identity;
         return record;
@@ -959,15 +996,6 @@ uintptr_t __cdecl ObjectIdentity(const XScalMovieValue* value) noexcept {
     record->movieRoot = movieRoot;
     record->identity = identity;
     return record;
-}
-
-// Copies the URL of a movie into url. Writes "" for a movie without a record.
-void CopyMovieUrl(
-    void* movieRoot,
-    char (&url)[XSCAL_SCALEFORM_MOVIE_URL_CAPACITY]) noexcept {
-    std::scoped_lock lock{movieMutex};
-    const auto* record = FindMovieRecord(movieRoot);
-    CopyText(url, sizeof(url), record == nullptr ? std::string_view{} : record->url);
 }
 
 int32_t __cdecl RegisterMovieHandlers(
@@ -1112,7 +1140,8 @@ XScalMovieRef __cdecl Retain(XScalMovie* movie, XScalMovieValue* value) noexcept
     }
     const auto identity = MakeIdentity(context->movieRoot);
     std::scoped_lock lock{refMutex};
-    for (std::size_t index = 0; index < refs.size(); ++index) {
+    for (std::size_t offset = 0; offset < refs.size(); ++offset) {
+        const auto index = (nextRefSlot + offset) % refs.size();
         auto& slot = refs[index];
         if (slot.used) {
             continue;
@@ -1123,6 +1152,7 @@ XScalMovieRef __cdecl Retain(XScalMovie* movie, XScalMovieValue* value) noexcept
         ++slot.generation;
         slot.used = true;
         liveRefCount.fetch_add(1, std::memory_order_relaxed);
+        nextRefSlot = (index + 1) % refs.size();
         source = {};
         return MakeRef(index, slot.generation);
     }
@@ -1178,27 +1208,42 @@ void DropRefsOfMovie(
     if (liveRefCount.load(std::memory_order_relaxed) == 0) {
         return;
     }
+    // One value is taken out per lock and released before the next is taken:
+    // owned values are linked to their neighbours, which may be other slots,
+    // and a byte copy is only valid until a neighbour moves. Each pass goes on
+    // from the slot after the last one taken. Another thread can retain a ref
+    // of this movie in a slot the pass has already gone by, so passes repeat
+    // until one that started at slot 0 finds nothing.
     for (;;) {
-        ScaleformValue value{};
-        {
-            std::scoped_lock lock{refMutex};
-            RetainedRef* found{};
-            for (auto& slot : refs) {
-                if (slot.used && slot.movieIdentity == movieIdentity) {
-                    found = &slot;
+        bool tookRef{};
+        for (std::size_t next = 0; next < refs.size();) {
+            ScaleformValue value{};
+            {
+                std::scoped_lock lock{refMutex};
+                RetainedRef* found{};
+                for (; next < refs.size(); ++next) {
+                    auto& slot = refs[next];
+                    if (slot.used && slot.movieIdentity == movieIdentity) {
+                        found = &slot;
+                        ++next;
+                        break;
+                    }
+                }
+                if (found == nullptr) {
                     break;
                 }
+                value = found->value;
+                found->value = {};
+                found->used = false;
+                liveRefCount.fetch_sub(1, std::memory_order_relaxed);
             }
-            if (found == nullptr) {
-                return;
+            tookRef = true;
+            if (context != nullptr) {
+                ReleaseValue(*context, value);
             }
-            value = found->value;
-            found->value = {};
-            found->used = false;
-            liveRefCount.fetch_sub(1, std::memory_order_relaxed);
         }
-        if (context != nullptr) {
-            ReleaseValue(*context, value);
+        if (!tookRef) {
+            return;
         }
     }
 }
@@ -1404,20 +1449,28 @@ const XScalScaleformMovieV1* InterfaceV1() noexcept {
 namespace {
 
 // Calls movie handlers whose swfName matches a loaded movie and that were not
-// told about it yet.
-void NotifyMovieLoaded(const MovieRootContext& context, std::uintptr_t identity) noexcept {
+// told about it yet. Returns true when the first checkedCount handlers have
+// been matched against the movie (vacuously when there are none), so no
+// handler below that count is left to notify.
+[[nodiscard]] bool NotifyMovieLoaded(
+    const MovieRootContext& context,
+    std::uintptr_t identity,
+    std::uint32_t& checkedCount) noexcept {
     const auto count = movieHandlerCount.load(std::memory_order_acquire);
+    checkedCount = count;
     if (count == 0) {
-        return;
+        return true;
     }
     char url[XSCAL_SCALEFORM_MOVIE_URL_CAPACITY];
     std::uint32_t newlyMatched{};
     {
         std::scoped_lock lock{movieMutex};
         auto* record = FindOrCreateMovieRecord(context.movieRoot, identity);
-        if (record == nullptr || !record->loaded ||
-            record->checkedHandlers == count) {
-            return;
+        if (record == nullptr || !record->loaded) {
+            return false;
+        }
+        if (record->checkedHandlers == count) {
+            return true;
         }
         CopyText(url, sizeof(url), record->url);
         const auto firstUnchecked = record->checkedHandlers;
@@ -1452,6 +1505,7 @@ void NotifyMovieLoaded(const MovieRootContext& context, std::uintptr_t identity)
                 static_cast<unsigned int>(index));
         }
     }
+    return true;
 }
 
 void NotifyMovieUnloading(const MovieRootContext& context, std::uintptr_t identity) noexcept {
@@ -1487,21 +1541,27 @@ void NotifyMovieUnloading(const MovieRootContext& context, std::uintptr_t identi
 }
 
 // Reads root1.loaderInfo.url once root1 exists. A movie whose URL cannot be
-// read counts as loaded with an empty URL.
-void DetectMovieLoad(const MovieRootContext& context, std::uintptr_t identity) noexcept {
+// read counts as loaded with an empty URL. Returns true when the record is
+// loaded.
+[[nodiscard]] bool DetectMovieLoad(
+    const MovieRootContext& context,
+    std::uintptr_t identity) noexcept {
     {
         std::scoped_lock lock{movieMutex};
         auto* record = FindOrCreateMovieRecord(context.movieRoot, identity);
-        if (record == nullptr || record->loaded) {
-            return;
+        if (record == nullptr) {
+            return false;
+        }
+        if (record->loaded) {
+            return true;
         }
         const auto attempt = record->frameAttempts++;
         if (attempt >= kEveryFrameLoadProbes && (attempt & kSlowLoadProbeMask) != 0) {
-            return;
+            return false;
         }
     }
     if (!HasScaleformObject(context, "root1")) {
-        return;
+        return false;
     }
     std::string url;
     if (!GetScaleformString(context, "root1.loaderInfo.url", url)) {
@@ -1510,17 +1570,67 @@ void DetectMovieLoad(const MovieRootContext& context, std::uintptr_t identity) n
     std::scoped_lock lock{movieMutex};
     auto* record = FindOrCreateMovieRecord(context.movieRoot, identity);
     if (record == nullptr) {
-        return;
+        return false;
     }
     CopyText(record->url, sizeof(record->url), url);
     record->loaded = true;
+    return true;
+}
+
+[[nodiscard]] bool IsMovieSettled(
+    void* movieRoot,
+    std::uint64_t epoch,
+    std::uint32_t handlerCount) noexcept {
+    for (const auto& entry : settledMovies) {
+        if (entry.movieRoot == movieRoot) {
+            return entry.epoch == epoch && entry.handlerCount == handlerCount;
+        }
+    }
+    return false;
+}
+
+void RememberSettledMovie(
+    void* movieRoot,
+    std::uint64_t epoch,
+    std::uint32_t handlerCount) noexcept {
+    SettledMovie* slot{};
+    for (auto& entry : settledMovies) {
+        if (entry.movieRoot == movieRoot) {
+            slot = &entry;
+            break;
+        }
+    }
+    if (slot == nullptr) {
+        slot = &settledMovies[nextSettledSlot];
+        nextSettledSlot = (nextSettledSlot + 1) % settledMovies.size();
+    }
+    *slot = {movieRoot, epoch, handlerCount};
 }
 
 bool AdvanceMovieVisitor(const MovieRootContext& context, void*) noexcept {
-    const auto identity = MakeIdentity(context.movieRoot);
-    RunPostedWork(context, identity);
-    DetectMovieLoad(context, identity);
-    NotifyMovieLoaded(context, identity);
+    // Read before the identity and the record. A record cleared or an address
+    // given a new generation after this read changes the epoch, so the entry
+    // stored below no longer matches; one cleared before it is already visible
+    // to the reads under movieMutex and generationMutex that follow.
+    const auto epoch = movieRecordEpoch.load(std::memory_order_acquire);
+    std::uintptr_t identity{};
+    bool hasIdentity{};
+    if (postedCount.load(std::memory_order_acquire) != 0) {
+        identity = MakeIdentity(context.movieRoot);
+        hasIdentity = true;
+        RunPostedWork(context, identity);
+    }
+    const auto handlerCount = movieHandlerCount.load(std::memory_order_acquire);
+    if (!IsMovieSettled(context.movieRoot, epoch, handlerCount)) {
+        if (!hasIdentity) {
+            identity = MakeIdentity(context.movieRoot);
+        }
+        const bool loaded = DetectMovieLoad(context, identity);
+        std::uint32_t checkedCount{};
+        if (NotifyMovieLoaded(context, identity, checkedCount) && loaded) {
+            RememberSettledMovie(context.movieRoot, epoch, checkedCount);
+        }
+    }
     if (IsAdvanceWatched(context.movieRoot)) {
         NotifyAdvance(context);
     }
@@ -1548,21 +1658,38 @@ bool InvokeFilterVisitor(const MovieRootContext& context, void* userData) noexce
     if (query.argumentCount > XSCAL_SCALEFORM_MOVIE_MAX_CALL_ARGUMENTS) {
         return true;
     }
-    char url[XSCAL_SCALEFORM_MOVIE_URL_CAPACITY];
-    CopyMovieUrl(context.movieRoot, url);
-
+    // The method path is compared first: most Invoke calls match no filter's
+    // method, and the swfName check needs the URL, which is read under
+    // movieMutex.
     const auto count = invokeFilterCount.load(std::memory_order_acquire);
-    const auto matches = [&](const InvokeFilter& entry) {
-        return !entry.disabled.load(std::memory_order_relaxed) &&
-            MatchesSwfName(entry.matchesAllMovies ? nullptr : entry.swfName, url) &&
-            (entry.matchesAllMethods ||
-             std::strcmp(entry.methodPath, query.methodPath) == 0);
-    };
-    bool anyMatch{};
-    for (std::uint32_t index = 0; index < count && !anyMatch; ++index) {
-        anyMatch = matches(invokeFilters[index]);
+    static_assert(XSCAL_SCALEFORM_MOVIE_MAX_INVOKE_FILTERS <= 32);
+    std::uint32_t matched{};
+    bool needsUrl{};
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const auto& entry = invokeFilters[index];
+        if (entry.disabled.load(std::memory_order_relaxed) ||
+            (!entry.matchesAllMethods &&
+             std::strcmp(entry.methodPath, query.methodPath) != 0)) {
+            continue;
+        }
+        matched |= std::uint32_t{1} << index;
+        needsUrl = needsUrl || !entry.matchesAllMovies;
     }
-    if (!anyMatch) {
+    if (needsUrl) {
+        std::scoped_lock lock{movieMutex};
+        const auto* record = FindMovieRecord(context.movieRoot);
+        const auto fileName =
+            SwfFileName(record == nullptr ? std::string_view{} : record->url);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const auto bit = std::uint32_t{1} << index;
+            const auto& entry = invokeFilters[index];
+            if ((matched & bit) != 0 && !entry.matchesAllMovies &&
+                !EqualsAsciiIgnoreCase(std::string_view{entry.swfName}, fileName)) {
+                matched &= ~bit;
+            }
+        }
+    }
+    if (matched == 0) {
         return true;
     }
 
@@ -1571,12 +1698,14 @@ bool InvokeFilterVisitor(const MovieRootContext& context, void* userData) noexce
         MakeBorrowedView(
             query.arguments + index * layout::kValueArrayStride, false, views[index]);
     }
-    const auto before = views;
+    std::array<XScalMovieValue, XSCAL_SCALEFORM_MOVIE_MAX_CALL_ARGUMENTS> before;
+    std::copy_n(views.begin(), query.argumentCount, before.begin());
 
     XScalMovie movie{&context};
     for (std::uint32_t index = 0; index < count; ++index) {
         auto& entry = invokeFilters[index];
-        if (!matches(entry)) {
+        if ((matched & (std::uint32_t{1} << index)) == 0 ||
+            entry.disabled.load(std::memory_order_relaxed)) {
             continue;
         }
         int32_t verdict{1};
@@ -1628,12 +1757,9 @@ bool MatchesSwfName(const char* swfName, const char* url) noexcept {
     if (swfName == nullptr) {
         return true;
     }
-    std::string_view fileName{url == nullptr ? "" : url};
-    const auto separator = fileName.find_last_of("/\\");
-    if (separator != std::string_view::npos) {
-        fileName.remove_prefix(separator + 1);
-    }
-    return EqualsAsciiIgnoreCase(std::string_view{swfName}, fileName);
+    return EqualsAsciiIgnoreCase(
+        std::string_view{swfName},
+        SwfFileName(url == nullptr ? "" : url));
 }
 
 void NotifyLookup(
@@ -1742,6 +1868,7 @@ void ReleaseMovie(void* movieRoot) noexcept {
     std::scoped_lock lock{movieMutex};
     if (auto* record = FindMovieRecord(movieRoot); record != nullptr) {
         *record = {};
+        movieRecordEpoch.fetch_add(1, std::memory_order_release);
     }
 }
 
@@ -1773,6 +1900,9 @@ void ForgetMovie(void* movieRoot) noexcept {
         ++movieGenerations[movieRoot];
     } catch (...) {
     }
+    // After the generation, so a thread that reads the new epoch also reads
+    // the new identity.
+    movieRecordEpoch.fetch_add(1, std::memory_order_release);
     if (watchedMovieCount.load(std::memory_order_acquire) == 0) {
         return;
     }
@@ -1800,11 +1930,13 @@ void ResetForTests() noexcept {
     {
         std::scoped_lock movieLock{movieMutex};
         movies.fill({});
+        movieRecordEpoch.fetch_add(1, std::memory_order_release);
     }
     {
         std::scoped_lock refLock{refMutex};
         refs.fill({});
         liveRefCount.store(0, std::memory_order_relaxed);
+        nextRefSlot = 0;
     }
     {
         std::scoped_lock postLock{postMutex};

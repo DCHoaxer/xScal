@@ -4,16 +4,22 @@ namespace sf {
 namespace {
 
 // Applies update to the packed mask until the compare-exchange succeeds.
-// Returns the mask value that update was applied to.
+// Returns the mask value that update was applied to. An update that leaves
+// the value unchanged is not written: Filter runs for every XInputGetState
+// call of the game, and its masks are 0 while nothing is suppressed.
 template <typename Update>
 std::uint32_t UpdateMask(
     std::atomic<std::uint32_t>& mask,
     Update update) noexcept {
     auto current = mask.load(std::memory_order_acquire);
     for (;;) {
+        const auto updated = update(current);
+        if (updated == current) {
+            return current;
+        }
         if (mask.compare_exchange_weak(
                 current,
-                update(current),
+                updated,
                 std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             return current;

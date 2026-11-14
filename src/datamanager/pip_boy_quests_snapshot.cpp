@@ -610,6 +610,16 @@ bool BuildPipBoyQuestsJson(
     }
 
     try {
+        // Rough size so a long quest list does not regrow the string many
+        // times: fixed field text per quest and objective plus their strings.
+        std::size_t estimatedBytes = 32;
+        for (const auto& quest : quests) {
+            estimatedBytes += 192 + quest.name.size() + quest.swfFile.size();
+            for (const auto& objective : quest.objectives) {
+                estimatedBytes += 64 + objective.text.size();
+            }
+        }
+        json.reserve((std::min)(estimatedBytes, kMaximumQuestsJsonBytes));
         json += R"({"quests":[)";
         for (std::size_t questIndex = 0; questIndex < quests.size(); ++questIndex) {
             const auto& quest = quests[questIndex];

@@ -16,7 +16,12 @@
 namespace sf {
 namespace {
 
-std::atomic<std::shared_ptr<MovieRootRouteState>> activeRouteState;
+// A route is never freed once it was published. After Restore a game thread
+// can still be inside Route, or between reading the hooked slot and loading
+// this pointer, and nothing reports when the last such call has returned.
+// This keeps one route per successful install, and its function handler,
+// which the game's function objects keep pointing to.
+std::atomic<MovieRootRouteState*> activeRouteState{};
 
 // Set at every install and never cleared. A failed restore can leave the hook in
 // the vtable slot with no active route, and the hook then forwards to this pointer.
@@ -25,12 +30,11 @@ std::atomic<MovieRootAdvanceFrame> installedOriginalAdvanceFrame{};
 std::atomic<MovieRootDestroy> installedOriginalDestroy{};
 std::atomic<MovieRootInvoke> installedOriginalInvoke{};
 
-void ClearActiveRouteState(
-    const std::shared_ptr<MovieRootRouteState>& routeState) noexcept {
-    auto expectedRoute = routeState;
+void ClearActiveRouteState(MovieRootRouteState* routeState) noexcept {
+    auto* expectedRoute = routeState;
     (void)activeRouteState.compare_exchange_strong(
         expectedRoute,
-        {},
+        nullptr,
         std::memory_order_acq_rel,
         std::memory_order_acquire);
 }
@@ -67,7 +71,8 @@ MovieRootHookController::~MovieRootHookController() {
         ClearNativeCallbackRouter(callbackRouter_);
         callbackRouterPublished_ = false;
     }
-    routeState_.reset();
+    // Not deleted; see activeRouteState.
+    routeState_ = nullptr;
 }
 
 VtableHookStatus MovieRootHookController::Install(
@@ -130,9 +135,9 @@ VtableHookStatus MovieRootHookController::Install(
         reinterpret_cast<std::uintptr_t>(vtableHook_.SlotAddress()) -
         layout::kGetVariableVtableOffset);
 
-    std::shared_ptr<MovieRootRouteState> candidate;
+    std::unique_ptr<MovieRootRouteState> candidate;
     try {
-        candidate = std::make_shared<MovieRootRouteState>(
+        candidate = std::make_unique<MovieRootRouteState>(
             functionHandler_,
             platform_,
             originalGetVariable,
@@ -146,17 +151,18 @@ VtableHookStatus MovieRootHookController::Install(
         return VtableHookStatus::AllocationFailed;
     }
 
-    std::shared_ptr<MovieRootRouteState> expectedRoute;
+    MovieRootRouteState* expectedRoute{};
     if (!activeRouteState.compare_exchange_strong(
             expectedRoute,
-            candidate,
+            candidate.get(),
             std::memory_order_release,
             std::memory_order_acquire)) {
+        // The candidate was never published, so no hook can be using it.
         (void)vtableHook_.Restore();
         ClearNativeCallbackRouter(callbackRouter_);
         return VtableHookStatus::AlreadyActive;
     }
-    routeState_ = candidate;
+    routeState_ = candidate.release();
     callbackRouterPublished_ = true;
 
     const auto vtableOffset =
@@ -234,7 +240,8 @@ VtableHookStatus MovieRootHookController::Restore() noexcept {
             ClearNativeCallbackRouter(callbackRouter_);
             callbackRouterPublished_ = false;
         }
-        routeState_.reset();
+        // Not deleted; see activeRouteState.
+        routeState_ = nullptr;
         modstorage::GlobalService().Clear();
     }
     return status;

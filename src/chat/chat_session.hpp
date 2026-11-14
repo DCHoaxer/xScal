@@ -124,6 +124,9 @@ private:
     RelayConnection requestConnection_;
     std::atomic_bool started_{};
     std::atomic_bool connectionStop_{};
+    // Only used to sleep between subscriber reconnects; holds no state.
+    std::mutex reconnectMutex_;
+    std::condition_variable reconnectWake_;
     std::atomic_bool connectionWorkerRunning_{};
     std::atomic_bool operationStop_{};
 
