@@ -18,6 +18,7 @@ enum class IniSection {
     None,
     AddressLibrary,
     Chat,
+    ProtoSync,
     Scaleform,
     XScalPriority,
 };
@@ -30,6 +31,7 @@ struct IniSectionName final {
 constexpr std::array kIniSectionNames{
     IniSectionName{IniSection::AddressLibrary, "AddressLibrary"},
     IniSectionName{IniSection::Chat, "Chat"},
+    IniSectionName{IniSection::ProtoSync, "ProtoSync"},
     IniSectionName{IniSection::Scaleform, "Scaleform"},
     IniSectionName{IniSection::XScalPriority, "xScalPriority"},
 };
@@ -293,6 +295,9 @@ bool ApplyXScalIni(
                     name, value, config.addressLibrary);
             } else if (section == IniSection::Chat) {
                 applied = ApplyChatSetting(name, value, config.chat);
+            } else if (section == IniSection::ProtoSync) {
+                applied = EqualsIgnoreCase(name, "enabled") &&
+                    ReadBoolean(value, config.protoSync.enabled);
             } else if (section == IniSection::Scaleform) {
                 applied = ApplyScaleformSetting(
                     name, value, config.scaleform);

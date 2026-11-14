@@ -8,6 +8,7 @@
 #include "platform/diagnostics.hpp"
 #include "platform/win32_file.hpp"
 #include "plugins/plugin_signature.hpp"
+#include "sync/proto_sync_interface.hpp"
 
 #include <algorithm>
 #include <array>
@@ -157,6 +158,10 @@ const void* __cdecl QueryHostInterface(
     if (maximumVersion >= 1u &&
         std::strcmp(name, XSCAL_JSON_INTERFACE) == 0) {
         return jsonapi::Interface();
+    }
+    if (maximumVersion >= 1u &&
+        std::strcmp(name, XSCAL_PROTO_SYNC_INTERFACE) == 0) {
+        return sync::ProtoSyncInterface();
     }
     return nullptr;
 }

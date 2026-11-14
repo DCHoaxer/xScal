@@ -17,6 +17,7 @@
 #include "modules/core/logo_animation.hpp"
 #include "modules/core/plugin_settings_menu.hpp"
 #include "plugins/plugins.hpp"
+#include "sync/proto_sync.hpp"
 
 #include <algorithm>
 #include <array>
@@ -868,6 +869,11 @@ VtableHookStatus Runtime::Initialize(
     }
     chat::SetChatInterfaceSession(
         config::GetRuntimeConfig().chat.enabled ? &chatSession_ : nullptr);
+    sync::GlobalProtoSync().Configure(
+        config::GetRuntimeConfig().protoSync.enabled,
+        profile.kind == TargetKind::Steam,
+        profile.protoSync,
+        moduleBase);
 
     callbackRouter_.SetTargetKind(profile.kind);
     const auto bridgeStatus = controller_.Install(

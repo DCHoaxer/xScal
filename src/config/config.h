@@ -42,6 +42,10 @@ struct ChatConfig final {
     }
 };
 
+struct ProtoSyncConfig final {
+    bool enabled{true};
+};
+
 // Default ini address library values, can be overridden by the user in the xscal.ini file
 struct AddressLibraryConfig final {
     bool autoUpdate{true};
@@ -72,6 +76,7 @@ inline constexpr XScalPriorityConfig kXScalPriority{};
 
 struct RuntimeConfig final {
     ChatConfig chat{};
+    ProtoSyncConfig protoSync{};
     AddressLibraryConfig addressLibrary{};
     XScalPriorityConfig xscalPriority{};
     ScaleformConfig scaleform{};

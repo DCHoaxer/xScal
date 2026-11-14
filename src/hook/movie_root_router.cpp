@@ -55,6 +55,25 @@ bool IsModStorageAlias(std::string_view path) noexcept {
     return false;
 }
 
+bool IsProtoSyncAlias(std::string_view path) noexcept {
+    constexpr std::string_view suffixes[]{
+        ".protoSync",
+        ".protoSync.open",
+        ".protoSync.close",
+        ".protoSync.publish",
+        ".protoSync.getState",
+        ".protoSync.getRevision",
+        ".protoSync.getMembers",
+    };
+    for (const auto suffix : suffixes) {
+        if (path.size() > suffix.size() && path.ends_with(suffix) &&
+            IsObjectAlias(path.substr(0, path.size() - suffix.size()))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool IsChatInterfaceAlias(std::string_view path) noexcept {
     constexpr std::string_view interfaceSuffix = ".chatInterface";
     constexpr std::string_view methodNames[]{
@@ -473,9 +492,10 @@ bool MovieRootRouteState::Route(
     const bool directStorage = routing::IsModStorageAlias(requestedPath);
     const bool directChatInterface =
         routing::IsChatInterfaceAlias(requestedPath);
+    const bool directProtoSync = routing::IsProtoSyncAlias(requestedPath);
     const bool objectAlias = routing::IsObjectAlias(requestedPath);
     if (!directCall && !directStorage && !directChatInterface &&
-        !objectAlias) {
+        !directProtoSync && !objectAlias) {
         return originalResult;
     }
 
@@ -597,6 +617,30 @@ bool MovieRootRouteState::Route(
             outValue,
             "root1.__SFCodeObj.call",
             0U);
+    }
+
+    if (directProtoSync) {
+        if (originalResult) {
+            return true;
+        }
+        if (attachments_.AttachRoot(movieRoot, true) !=
+            RootAttachStatus::Attached) {
+            return false;
+        }
+        constexpr std::string_view canonicalCodeObject{"root1.__SFCodeObj"};
+        const auto suffix = requestedPath.substr(requestedPath.rfind(".protoSync"));
+        std::array<char, 64> canonical{};
+        std::copy(canonicalCodeObject.begin(), canonicalCodeObject.end(), canonical.begin());
+        std::copy(suffix.begin(), suffix.end(),
+            canonical.begin() + canonicalCodeObject.size());
+        return RetryWithCanonicalPath(
+            original,
+            movieRoot,
+            outValue,
+            path,
+            callerR9Scratch,
+            requestedPath,
+            canonical.data());
     }
 
     if (directStorage) {

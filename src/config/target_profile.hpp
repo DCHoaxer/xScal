@@ -95,6 +95,20 @@ struct NativePlayerMapPositionProfile final {
         const NativePlayerMapPositionProfile&) const noexcept = default;
 };
 
+// All values or none; Steam only.
+struct ProtoSyncProfile final {
+    std::uintptr_t playerManagerGlobal;
+    std::uintptr_t recordOwnerGlobal;
+    std::uintptr_t worldDataModelGlobal;
+    std::uintptr_t worldDataModelVtable;
+    std::uintptr_t tryAcquireReadLock;
+    std::uintptr_t releaseReadLock;
+    std::size_t joinedWorldOffset;
+
+    [[nodiscard]] constexpr bool operator==(
+        const ProtoSyncProfile&) const noexcept = default;
+};
+
 // Exact-build data for the libdeflate archive decompression. All values or
 // none.
 struct ArchiveStreamProfile final {
@@ -442,6 +456,7 @@ struct TargetProfile final {
     config::DataManagerProfile dataManager;
     // Zero when the Address Library has no archive stream records.
     config::ArchiveStreamProfile archiveStream;
+    config::ProtoSyncProfile protoSync;
     bool pipBoyStatsEffectsEnabled;
     bool pipBoySpecialEnabled;
     bool pipBoyPlayerInfoEnabled;

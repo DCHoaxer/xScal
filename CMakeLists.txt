@@ -102,6 +102,10 @@ set(XSCAL_CORE_SOURCES
     src/modules/xscal_priority/xscal_priority.cpp
     src/platform/windows_memory.cpp
     src/runtime/runtime.cpp
+    src/sync/proto_sync.cpp
+    src/sync/proto_sync_interface.cpp
+    src/sync/steam_lobby.cpp
+    src/sync/world_players.cpp
     src/scaleform/value.cpp
     src/scaleform/bridge_attachment.cpp
     src/scaleform/native_handler.cpp

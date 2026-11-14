@@ -6,6 +6,8 @@
 #include "platform/diagnostics.hpp"
 #include "scaleform/native_handler.hpp"
 #include "scaleform/scaleform_layout.hpp"
+#include "sync/proto_sync.hpp"
+#include "sync/proto_sync_interface.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -237,6 +239,28 @@ template <typename Attach>
         });
 }
 
+// Attached even when protoSync is off, so mods can read getState().
+[[nodiscard]] bool AttachProtoSync(
+    MovieRootContext& context,
+    ScaleformValue& bridge) noexcept {
+    return AttachObjectMember(
+        context,
+        bridge,
+        "protoSync",
+        [&context](ScaleformValue& protoSync) {
+            for (const auto& member : sync::GlobalProtoSyncFunctions().Members()) {
+                if (!AttachMissingFunction(
+                        context,
+                        protoSync,
+                        member.name,
+                        member.functionHandler)) {
+                    return false;
+                }
+            }
+            return true;
+        });
+}
+
 [[nodiscard]] bool AttachChatInterfaceObject(
     MovieRootContext& context,
     ScaleformValue& codeObject) noexcept {
@@ -329,7 +353,9 @@ template <typename Attach>
     const bool versionReady = AttachVersion(context, bridge, targetKind);
     const bool storageReady = versionReady &&
         AttachModStorage(context, bridge);
-    result.attachment.membersReady = versionReady && storageReady;
+    const bool protoSyncReady = storageReady &&
+        AttachProtoSync(context, bridge);
+    result.attachment.membersReady = versionReady && storageReady && protoSyncReady;
     if (result.attachment.membersReady &&
         chat::IsChatInterfaceAvailable()) {
         result.attachment.chatReady =
@@ -472,6 +498,7 @@ void BridgeAttachmentService::ForgetRootAttachments(void* movieRoot) noexcept {
         ForgetComponent(components_[index], movieRoot);
     }
     modstorage::GlobalService().ForgetMovie(movieRoot);
+    sync::GlobalProtoSync().ForgetOwner(movieRoot);
     attachmentChanges_.fetch_add(1, std::memory_order_release);
 }
 
