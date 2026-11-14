@@ -1061,6 +1061,37 @@ constexpr std::array kPipBoyInventoryFields{
         FieldKind::RequiredConstant),
 };
 
+constexpr std::array kProtoSyncFields{
+    Field(
+        XSCAL_ADDRESS_PLAYER_MANAGER_GLOBAL,
+        offsetof(config::ProtoSyncProfile, playerManagerGlobal),
+        FieldKind::Rva),
+    Field(
+        XSCAL_ADDRESS_PLAYER_RECORD_OWNER_GLOBAL,
+        offsetof(config::ProtoSyncProfile, recordOwnerGlobal),
+        FieldKind::Rva),
+    Field(
+        XSCAL_ADDRESS_WORLD_DATA_MODEL_GLOBAL,
+        offsetof(config::ProtoSyncProfile, worldDataModelGlobal),
+        FieldKind::Rva),
+    Field(
+        XSCAL_ADDRESS_WORLD_DATA_MODEL_VTABLE,
+        offsetof(config::ProtoSyncProfile, worldDataModelVtable),
+        FieldKind::Rva),
+    Field(
+        XSCAL_ADDRESS_TRY_ACQUIRE_READ_LOCK,
+        offsetof(config::ProtoSyncProfile, tryAcquireReadLock),
+        FieldKind::Rva),
+    Field(
+        XSCAL_ADDRESS_ACTIVE_EFFECTS_RELEASE_LOCK,
+        offsetof(config::ProtoSyncProfile, releaseReadLock),
+        FieldKind::Rva),
+    Field(
+        XSCAL_CONSTANT_WORLD_DATA_MODEL_JOINED_WORLD_OFFSET,
+        offsetof(config::ProtoSyncProfile, joinedWorldOffset),
+        FieldKind::RequiredConstant),
+};
+
 void ReadPipBoyInventoryProfile(
     const XScalAddressLibraryV1& addresses,
     config::NativePipBoyInventoryProfile& inventory) noexcept {
@@ -1175,6 +1206,7 @@ bool ReadTargetProfile(
     ReadItemClassProfile(addresses, result.dataManager.itemClass);
     ReadPipBoyCollectionsProfile(addresses, result.dataManager.pipBoyCollections);
     ReadArchiveStreamProfile(addresses, result.archiveStream);
+    ReadProfileFields(addresses, kProtoSyncFields, result.protoSync);
 
     std::size_t statsEffectsEnabled{};
     result.pipBoyStatsEffectsEnabled =

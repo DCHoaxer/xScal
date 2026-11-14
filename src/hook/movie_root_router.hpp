@@ -59,6 +59,7 @@ namespace routing {
 [[nodiscard]] bool IsObjectAlias(std::string_view path) noexcept;
 [[nodiscard]] bool IsDirectCallAlias(std::string_view path) noexcept;
 [[nodiscard]] bool IsModStorageAlias(std::string_view path) noexcept;
+[[nodiscard]] bool IsProtoSyncAlias(std::string_view path) noexcept;
 [[nodiscard]] bool IsChatInterfaceAlias(std::string_view path) noexcept;
 [[nodiscard]] bool ShouldAttachRootBridge(std::string_view path) noexcept;
 
