@@ -20,6 +20,7 @@ Comradebass
 ggMatze
 Devotek
 Rigell
+Neanka, Valdacil, Old Nick, ParasiteX and sekoms for DEF_UI - icon resources
 
 # no, I won't explain this one
 <3 :)
@@ -86,6 +87,15 @@ SPECIAL THANKS
 Jarari for Condition Boy mod (FO4) - icon resources
 
 This software uses ActionJSON. (c) 2010 Maximilian Herkender.
+This software uses the DEF_UI icon library.
+
+
+HUD MOD LOADER
+
+CREATED BY
+Mapex
+Dtim
+MsZelia
 
 
 DLSS FRAMEGEN PLUGIN
@@ -126,10 +136,12 @@ DCHoaxer
 This software uses libdeflate. Copyright 2016 Eric Biggers, Copyright 2024 Google LLC. MIT License.
 
 
-FAVORITES VISIBLE
+SHOW MY GEAR
 
 CREATED BY
 DCHoaxer
+
+This software uses the DEF_UI icon library.
 
 
 LEGAL
