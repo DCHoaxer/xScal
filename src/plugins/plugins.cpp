@@ -1498,6 +1498,10 @@ void SetAddressLibrary(
     addressLibrary = library;
 }
 
+const XScalAddressLibraryV1* AddressLibrary() noexcept {
+    return addressLibrary;
+}
+
 void SetScaleformMovieInterface(
     const XScalScaleformMovieV2* movieInterface,
     const XScalScaleformMovieV1* movieInterfaceV1) noexcept {

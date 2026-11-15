@@ -1,0 +1,133 @@
+# xScal credits, shown from the main menu (X key or pad X).
+# Same layout as the game's interface/credits.txt: a heading line, one name per line, an empty
+# line between sections. Every line is shown as written, centered; lines starting with # are
+# left out. The xScal logo is shown above the first line.
+# The file is built into dxgi.dll: rebuild xScal after changing it.
+
+CREATED BY
+DCHoaxer
+
+COLLABOLATORS
+Carnix (Kvetchus) 
+midopa (another.casual)
+
+SPECIAL THANKS
+FiatPax
+Kvetchus
+Felix Quinlan
+Iga Chmiel (Missti97)
+Comradebass
+ggMatze
+Devotek
+Rigell
+
+<3 :)
+Varga
+
+YOU'RE SPECIAL
+Biff
+FrankyOrson
+gg2ga
+billpearce
+Carpecerevisi
+cybelene
+Ohber-jitterz
+ADAtheBOT
+michealo
+John DeVeaux
+Ulf
+KronosX2
+Boomer
+Temexter
+Taugenichts
+rux616
+TheBranbeno
+Rev
+Mapex
+
+This software uses yyjson. Copyright (c) 2020 YaoYuan. MIT License.
+This software uses libdeflate. Copyright 2016 Eric Biggers, Copyright 2024 Google LLC. MIT License.
+
+IMPROVED HUD
+
+CREATED BY
+DCHoaxer
+
+TESTERS
+RegLoiD
+Branbeno7
+Hotelportier
+Manu
+Nankam
+ggMatze
+Flubber1977
+GodofcheeseSWE
+Michealo
+Crono46
+Jsalchemist
+bennyD
+MagicalBeard
+Jernksa
+Godofcheese
+
+
+PORTUGUESE TRANSLATION 
+AlissonGG2
+
+SPECIAL THANKS
+Jarari for Condition boy mod  (FO4) - icon resources
+
+This software uses ActionJSON. (c) 2010 Maximilian Herkender.
+
+
+DLSS FRAMEGEN PLUGIN
+
+CREATED BY 
+DCHoaxer
+
+SPECIAL THANKS 
+BorderXer
+RolandEcho
+RVFFVS
+
+DLSS FRAME GEN uses NVIDIA DLSS and NVIDIA Streamline. Copyright (c) NVIDIA Corporation.
+DLSS FRAME GEN uses AMD FidelityFX Super Resolution. Copyright (c) 2025 Advanced Micro Devices, Inc.
+DLSS FRAME GEN uses the Intel(R) Xe Super Sampling (XeSS) SDK. Copyright (C) 2025 Intel Corporation.
+DLSS FRAME GEN uses Dear ImGui. Copyright (c) 2014-2026 Omar Cornut. MIT License.
+DLSS FRAME GEN uses tinf. Copyright (c) 2003-2019 Joergen Ibsen. zlib License.
+DLSS FRAME GEN uses rtx40mfg-unlock. Copyright (c) 2026 Michael Robles. MIT License.
+NVIDIA and DLSS are trademarks or registered trademarks of NVIDIA Corporation. AMD and FidelityFX
+are trademarks of Advanced Micro Devices, Inc. Intel and XeSS are trademarks of Intel Corporation
+or its subsidiaries. Other names may be claimed as the property of others.
+
+AUTO CRITICAL
+
+CREATED BY
+DCHoaxer
+
+SPECIAL THANKS
+Gabriela Jablonska
+
+FAST LOAD
+
+CREATED BY
+DCHoaxer
+
+This software uses libdeflate. Copyright 2016 Eric Biggers, Copyright 2024 Google LLC. MIT License.
+
+
+FAVORITES VISIBLE
+
+CREATED BY
+DCHoaxer
+
+LEGAL
+xScal is an unofficial modification. It is not made, endorsed or supported by
+Bethesda Softworks LLC, ZeniMax Media Inc. or Microsoft Corporation.
+Fallout(R) 76 (C) Bethesda Softworks LLC, a ZeniMax Media company. Bethesda, Bethesda Softworks,
+Bethesda Game Studios, ZeniMax, Pip-Boy, Vault-Tec and related logos are registered trademarks or
+trademarks of ZeniMax Media Inc. in the U.S. and/or other countries. Fallout, Vault Boy and related
+logos are trademarks or registered trademarks of Bethesda Softworks LLC in the U.S. and/or other
+countries. The music of these credits is played by the game from its own files.
+xScal is provided "as is", without warranty of any kind. Use it at your own risk.
+

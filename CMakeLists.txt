@@ -96,6 +96,7 @@ set(XSCAL_CORE_SOURCES
     src/input/gamepad_suppression.cpp
     src/input/xinput_hook.cpp
     src/modules/core/core_module.cpp
+    src/modules/core/credits_music.cpp
     src/modules/core/game_language.cpp
     src/modules/core/logo_animation.cpp
     src/modules/core/plugin_settings_menu.cpp
@@ -144,12 +145,32 @@ file(WRITE "${OUTPUT}"
     "inline constexpr char kTime[]{\"${XSCAL_BUILD_TIME}\"};\n"
     "}\n")
 ]=])
+# Generates xscal_credits_text.hpp from src/modules/core/credits.txt, the text of the main menu
+# credits. The header is replaced only when the text changed, so an unchanged file recompiles nothing.
+set(XSCAL_CREDITS_TEXT "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/core/credits.txt")
+set(XSCAL_CREDITS_HEADER "${XSCAL_BUILD_INFO_DIR}/xscal_credits_text.hpp")
+set(XSCAL_CREDITS_SCRIPT "${CMAKE_BINARY_DIR}/write_credits_text.cmake")
+file(WRITE "${XSCAL_CREDITS_SCRIPT}" [=[
+file(READ "${INPUT}" XSCAL_CREDITS_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," XSCAL_CREDITS_BYTES "${XSCAL_CREDITS_HEX}")
+file(WRITE "${OUTPUT}.new"
+    "#pragma once\n\n"
+    "namespace sf::build_info {\n"
+    "// src/modules/core/credits.txt as UTF-8 bytes, followed by a zero.\n"
+    "inline constexpr unsigned char kCreditsText[]{${XSCAL_CREDITS_BYTES}0x00};\n"
+    "}\n")
+configure_file("${OUTPUT}.new" "${OUTPUT}" COPYONLY)
+]=])
 add_custom_target(xscal_build_info ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${XSCAL_BUILD_INFO_DIR}"
     COMMAND ${CMAKE_COMMAND}
         "-DOUTPUT=${XSCAL_BUILD_INFO_HEADER}"
         -P "${XSCAL_BUILD_INFO_SCRIPT}"
-    BYPRODUCTS "${XSCAL_BUILD_INFO_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        "-DINPUT=${XSCAL_CREDITS_TEXT}"
+        "-DOUTPUT=${XSCAL_CREDITS_HEADER}"
+        -P "${XSCAL_CREDITS_SCRIPT}"
+    BYPRODUCTS "${XSCAL_BUILD_INFO_HEADER}" "${XSCAL_CREDITS_HEADER}"
     VERBATIM)
 
 add_library(dxgi SHARED

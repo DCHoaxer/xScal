@@ -1,11 +1,12 @@
 package
 {
-   // The game translates $ON, $OFF, $BACK and $ACCEPT itself. These two strings have no game text.
+   // The game translates $ON, $OFF, $BACK and $ACCEPT itself. These strings have no game text.
    public final class Texts
    {
 
       private static const TABLE:Object = {
          "entry":{"en":"PLUGINS SETTINGS","pl":"USTAWIENIA WTYCZEK","de":"PLUGIN-EINSTELLUNGEN","fr":"PARAMÈTRES DES PLUGINS","it":"IMPOSTAZIONI PLUGIN","es":"AJUSTES DE PLUGINS","ru":"НАСТРОЙКИ ПЛАГИНОВ","zh":"插件设置","zh2":"外掛設定"},
+         "credits_hint":{"en":"XSCAL CREDITS","pl":"TWÓRCY XSCAL","de":"XSCAL-CREDITS","fr":"CRÉDITS XSCAL","it":"RICONOSCIMENTI XSCAL","es":"CRÉDITOS DE XSCAL","ru":"АВТОРЫ XSCAL","zh":"XSCAL 制作人员","zh2":"XSCAL 製作人員"},
          "no_plugins":{"en":"No xScal plugins","pl":"Brak wtyczek xScal","de":"Keine xScal-Plugins","fr":"Aucun plugin xScal","it":"Nessun plugin xScal","es":"Sin plugins de xScal","ru":"Нет плагинов xScal","zh":"没有 xScal 插件","zh2":"沒有 xScal 外掛"}
       };
 

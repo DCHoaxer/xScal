@@ -1,8 +1,10 @@
 #include "modules/core/plugin_settings_menu.hpp"
 
 #include "api/scaleform_movie_interface.hpp"
+#include "modules/core/credits_music.hpp"
 #include "modules/core/game_language.hpp"
 #include "xscal/movie.hpp"
+#include "xscal_credits_text.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -28,39 +30,69 @@ constexpr std::uint32_t kOwnerWaitFrames = 600;
 constexpr std::uint32_t kAttachAttempts = 10;
 
 std::atomic<bool> pluginWindowOpen{false};
+std::atomic<bool> creditsOpen{false};
 
 // mainmenu.swf is a separate movie below seventysixmenu.swf, so the SWF cannot reach its news panel,
-// which would show through the option list.
+// which would show through the option list, or the rest of Menu_mc, which would show under the
+// credits.
 class NewsPanelPatch final : public xscal::MoviePatch {
 public:
     NewsPanelPatch() : MoviePatch("mainmenu.swf", wantFrames) {}
 
     void onUnload(xscal::Movie&) override {
-        panelHidden_ = false;
+        hidden_ = Hidden::none;
     }
 
     void onFrame(xscal::Movie& movie) override {
-        const bool windowOpen = pluginWindowOpen.load(std::memory_order_relaxed);
-        if (windowOpen == panelHidden_) {
+        Hidden wanted = Hidden::none;
+        if (creditsOpen.load(std::memory_order_relaxed)) {
+            wanted = Hidden::wholeMenu;
+        } else if (pluginWindowOpen.load(std::memory_order_relaxed)) {
+            wanted = Hidden::newsPanel;
+        }
+        if (wanted == hidden_) {
             return;
         }
-        xscal::Value panel = movie.get("root1.Menu_mc").call("getChildByName", "MOTD_mc");
-        if (!panel.isObject()) {
+        if (hidden_ != Hidden::none) {
+            xscal::Value shown = find(movie, hidden_);
+            if (!shown.isObject()) {
+                return;
+            }
+            (void)shown.set("visible", wasVisible_);
+            hidden_ = Hidden::none;
+        }
+        if (wanted == Hidden::none) {
             return;
         }
-        if (windowOpen) {
-            panelWasVisible_ = false;
-            (void)panel.get("visible").read(panelWasVisible_);
-            panelHidden_ = panel.set("visible", false);
-        } else {
-            (void)panel.set("visible", panelWasVisible_);
-            panelHidden_ = false;
+        xscal::Value target = find(movie, wanted);
+        if (!target.isObject()) {
+            return;
+        }
+        wasVisible_ = false;
+        (void)target.get("visible").read(wasVisible_);
+        if (target.set("visible", false)) {
+            hidden_ = wanted;
         }
     }
 
 private:
-    bool panelHidden_{};
-    bool panelWasVisible_{};
+    // The settings window covers the option area only, so it hides the news panel. The credits show
+    // alone over the menu video, so they hide all of Menu_mc.
+    enum class Hidden {
+        none,
+        newsPanel,
+        wholeMenu,
+    };
+
+    static xscal::Value find(xscal::Movie& movie, Hidden which) {
+        if (which == Hidden::newsPanel) {
+            return movie.get("root1.Menu_mc").call("getChildByName", "MOTD_mc");
+        }
+        return movie.get("root1.Menu_mc");
+    }
+
+    Hidden hidden_{Hidden::none};
+    bool wasVisible_{};
 };
 
 NewsPanelPatch newsPanelPatch;
@@ -83,6 +115,8 @@ public:
         clearLoad();
         movieIdentity_ = 0;
         pluginWindowOpen.store(false, std::memory_order_relaxed);
+        creditsOpen.store(false, std::memory_order_relaxed);
+        SetCreditsMusicPlaying(false);
     }
 
     void onFrame(xscal::Movie& movie) override {
@@ -107,10 +141,16 @@ public:
         if (!content.isObject()) {
             return;
         }
+        // isWindowOpen is true for the settings window and for the credits.
         bool windowOpen = false;
         (void)content.get("isWindowOpen").read(windowOpen);
         pluginWindowOpen.store(windowOpen, std::memory_order_relaxed);
+        bool creditsShown = false;
+        (void)content.get("isCreditsOpen").read(creditsShown);
+        creditsOpen.store(creditsShown, std::memory_order_relaxed);
+        SetCreditsMusicPlaying(creditsShown);
         setLanguage(content);
+        setCreditsText(content);
         attachCodeObject(movie);
     }
 
@@ -119,6 +159,7 @@ private:
         loaderRef_ = {};
         loadStarted_ = false;
         languageSet_ = false;
+        creditsTextSet_ = false;
         codeObjectDone_ = false;
         attempts_ = 0;
         attachAttempts_ = 0;
@@ -229,6 +270,15 @@ private:
         languageSet_ = content.set("language", languageCodeForGame(gameLanguage));
     }
 
+    // The credits text is src/modules/core/credits.txt, built into the DLL.
+    void setCreditsText(xscal::Value& content) {
+        if (creditsTextSet_) {
+            return;
+        }
+        creditsTextSet_ = content.set(
+            "creditsText", reinterpret_cast<const char*>(build_info::kCreditsText));
+    }
+
     // xScal attaches call() by itself only for root1.__SFCodeObj and configured paths, and this
     // movie has neither. attachCodeObject also fails while another thread holds the attach lock, so
     // it is tried on a few frames.
@@ -250,6 +300,7 @@ private:
     xscal::Ref loaderRef_;
     bool loadStarted_{};
     bool languageSet_{};
+    bool creditsTextSet_{};
     bool codeObjectDone_{};
     std::uint32_t attempts_{};
     std::uint32_t attachAttempts_{};
