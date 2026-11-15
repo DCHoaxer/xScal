@@ -7,8 +7,8 @@
 CREATED BY
 DCHoaxer
 
-COLLABOLATORS
-Carnix (Kvetchus) 
+COLLABORATORS
+Carnix (Kvetchus)
 midopa (another.casual)
 
 SPECIAL THANKS
@@ -21,6 +21,7 @@ ggMatze
 Devotek
 Rigell
 
+# no, I won't explain this one
 <3 :)
 Varga
 
@@ -55,6 +56,7 @@ MagicalBeard
 This software uses yyjson. Copyright (c) 2020 YaoYuan. MIT License.
 This software uses libdeflate. Copyright 2016 Eric Biggers, Copyright 2024 Google LLC. MIT License.
 
+
 IMPROVED HUD
 
 CREATED BY
@@ -77,22 +79,21 @@ MagicalBeard
 Jernksa
 Godofcheese
 
-
-PORTUGUESE TRANSLATION 
+PORTUGUESE TRANSLATION
 AlissonGG2
 
 SPECIAL THANKS
-Jarari for Condition boy mod  (FO4) - icon resources
+Jarari for Condition Boy mod (FO4) - icon resources
 
 This software uses ActionJSON. (c) 2010 Maximilian Herkender.
 
 
 DLSS FRAMEGEN PLUGIN
 
-CREATED BY 
+CREATED BY
 DCHoaxer
 
-SPECIAL THANKS 
+SPECIAL THANKS
 BorderXer
 RolandEcho
 RVFFVS
@@ -107,6 +108,7 @@ NVIDIA and DLSS are trademarks or registered trademarks of NVIDIA Corporation. A
 are trademarks of Advanced Micro Devices, Inc. Intel and XeSS are trademarks of Intel Corporation
 or its subsidiaries. Other names may be claimed as the property of others.
 
+
 AUTO CRITICAL
 
 CREATED BY
@@ -114,6 +116,7 @@ DCHoaxer
 
 SPECIAL THANKS
 Gabriela Jablonska
+
 
 FAST LOAD
 
@@ -128,6 +131,7 @@ FAVORITES VISIBLE
 CREATED BY
 DCHoaxer
 
+
 LEGAL
 xScal is an unofficial modification. It is not made, endorsed or supported by
 Bethesda Softworks LLC, ZeniMax Media Inc. or Microsoft Corporation.
@@ -140,6 +144,10 @@ Bethesda Game Studios, ZeniMax, Pip-Boy, Vault-Tec and related logos are registe
 trademarks of ZeniMax Media Inc. in the U.S. and/or other countries. Fallout, Vault Boy and related
 logos are trademarks or registered trademarks of Bethesda Softworks LLC in the U.S. and/or other
 countries. The music of these credits is played by the game from its own files.
-xScal is provided "as is", without warranty of any kind. Use it at your own risk.
 Fallout artwork shown in these credits belongs to its respective owners.
+xScal is provided "as is", without warranty of any kind. Use it at your own risk.
+
+
+THANK YOU FOR PLAYING
+To everyone who used xScal, reported bugs and stayed with it through every game update.
 
