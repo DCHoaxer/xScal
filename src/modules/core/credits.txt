@@ -2,7 +2,7 @@
 # Same layout as the game's interface/credits.txt: a heading line, one name per line, an empty
 # line between sections. Every line is shown as written, centered; lines starting with # are
 # left out. The xScal logo is shown above the first line.
-# The file is built into dxgi.dll: rebuild xScal after changing it.
+# The file is built into dxgi.dll: rebuild xScal after changing it. But why would you?
 
 CREATED BY
 DCHoaxer
@@ -44,6 +44,13 @@ rux616
 TheBranbeno
 Rev
 Mapex
+
+ALL OTHER PLUGIN AUTHORS WHO MAKE THIS PROJECT ALIVE
+PatrickJnr
+AZOSI
+pubglite18
+LTDemian
+MagicalBeard
 
 This software uses yyjson. Copyright (c) 2020 YaoYuan. MIT License.
 This software uses libdeflate. Copyright 2016 Eric Biggers, Copyright 2024 Google LLC. MIT License.
@@ -130,4 +137,5 @@ trademarks of ZeniMax Media Inc. in the U.S. and/or other countries. Fallout, Va
 logos are trademarks or registered trademarks of Bethesda Softworks LLC in the U.S. and/or other
 countries. The music of these credits is played by the game from its own files.
 xScal is provided "as is", without warranty of any kind. Use it at your own risk.
+Fallout artwork shown in these credits belongs to its respective owners.
 

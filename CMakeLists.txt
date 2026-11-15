@@ -161,6 +161,19 @@ file(WRITE "${OUTPUT}.new"
     "}\n")
 configure_file("${OUTPUT}.new" "${OUTPUT}" COPYONLY)
 ]=])
+# Generates plugin_settings_swf_bytes.inc from src/modules/core/plugin_settings.swf, the settings and
+# credits movie that plugin_settings_menu.cpp builds into the DLL. The SWF is committed as a binary
+# and rebuilt by src/modules/core/plugin_settings_swf/build.sh. The file is replaced only when the
+# SWF changed.
+set(XSCAL_SETTINGS_SWF "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/core/plugin_settings.swf")
+set(XSCAL_SETTINGS_SWF_BYTES "${XSCAL_BUILD_INFO_DIR}/plugin_settings_swf_bytes.inc")
+set(XSCAL_SETTINGS_SWF_SCRIPT "${CMAKE_BINARY_DIR}/write_settings_swf_bytes.cmake")
+file(WRITE "${XSCAL_SETTINGS_SWF_SCRIPT}" [=[
+file(READ "${INPUT}" XSCAL_SWF_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," XSCAL_SWF_BYTES "${XSCAL_SWF_HEX}")
+file(WRITE "${OUTPUT}.new" "${XSCAL_SWF_BYTES}\n")
+configure_file("${OUTPUT}.new" "${OUTPUT}" COPYONLY)
+]=])
 add_custom_target(xscal_build_info ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "${XSCAL_BUILD_INFO_DIR}"
     COMMAND ${CMAKE_COMMAND}
@@ -170,7 +183,11 @@ add_custom_target(xscal_build_info ALL
         "-DINPUT=${XSCAL_CREDITS_TEXT}"
         "-DOUTPUT=${XSCAL_CREDITS_HEADER}"
         -P "${XSCAL_CREDITS_SCRIPT}"
-    BYPRODUCTS "${XSCAL_BUILD_INFO_HEADER}" "${XSCAL_CREDITS_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        "-DINPUT=${XSCAL_SETTINGS_SWF}"
+        "-DOUTPUT=${XSCAL_SETTINGS_SWF_BYTES}"
+        -P "${XSCAL_SETTINGS_SWF_SCRIPT}"
+    BYPRODUCTS "${XSCAL_BUILD_INFO_HEADER}" "${XSCAL_CREDITS_HEADER}" "${XSCAL_SETTINGS_SWF_BYTES}"
     VERBATIM)
 
 add_library(dxgi SHARED
