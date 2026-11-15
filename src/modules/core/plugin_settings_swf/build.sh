@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Compiles PluginSettings.swf with the Apache Flex SDK 4.16.1 compiler and writes its bytes to
-# ../plugin_settings_swf_bytes.inc, which plugin_settings_menu.cpp embeds. Run it after changing
-# src/ and commit the generated file; the xScal build itself does not need the Flex SDK.
+# Compiles PluginSettings.swf with the Apache Flex SDK 4.16.1 compiler and copies it to
+# ../plugin_settings.swf. The xScal build turns that file into a byte array for
+# plugin_settings_menu.cpp (see CMakeLists.txt). Run it after changing src/ or assets/ and commit
+# plugin_settings.swf; the xScal build itself does not need the Flex SDK.
 #
 #   FLEX_HOME   Flex SDK root (default: ~/sdks/flex-4.16.1). Needs
 #               frameworks/libs/player/32.0/playerglobal.swc.
@@ -35,5 +36,9 @@ trap 'rm -rf "$work"' EXIT
     src/PluginSettings.as \
     > "$work/mxmlc.log" 2>&1 || { cat "$work/mxmlc.log"; exit 1; }
 
-od -An -v -tu1 "$work/PluginSettings.swf" | sed -E 's/ +/,/g; s/^,//; s/$/,/' > ../plugin_settings_swf_bytes.inc
-echo "PluginSettings.swf: $(grep -c 'Warning' "$work/mxmlc.log" || true) warnings, $(stat -c %s "$work/PluginSettings.swf") bytes"
+# mxmlc stores every embedded PNG with 32 bits per pixel. The credits pictures have at most 256
+# colors each; stored as 8-bit indexes they take about a third of the space.
+python3 -I index_bitmaps.py "$work/PluginSettings.swf"
+
+cp "$work/PluginSettings.swf" ../plugin_settings.swf
+echo "plugin_settings.swf: $(grep -c 'Warning' "$work/mxmlc.log" || true) warnings, $(stat -c %s "$work/PluginSettings.swf") bytes"

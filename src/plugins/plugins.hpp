@@ -22,6 +22,8 @@ namespace sf::plugins {
 void SetTargetKind(TargetKind kind) noexcept;
 void SetAddressLibrary(
     const XScalAddressLibraryV1* addressLibrary) noexcept;
+// The library passed to SetAddressLibrary, null before that.
+[[nodiscard]] const XScalAddressLibraryV1* AddressLibrary() noexcept;
 // Published only after the MovieRoot hook is installed.
 void SetScaleformMovieInterface(
     const XScalScaleformMovieV2* movieInterface,

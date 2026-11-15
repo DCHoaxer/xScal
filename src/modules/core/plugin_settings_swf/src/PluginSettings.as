@@ -6,11 +6,15 @@ package
    import flash.display.Sprite;
    import flash.events.Event;
    import flash.events.FocusEvent;
+   import flash.text.TextField;
+   import flash.text.TextFieldType;
    import flash.utils.getDefinitionByName;
    import flash.utils.getTimer;
 
    // Document class of PluginSettings.swf, loaded into seventysixmenu.swf by xScal's core module. Adds the
-   // main menu entry and opens the window as a component of the game's menu stack.
+   // main menu entry, opens the settings window from it and the xScal credits on X (keyboard or pad),
+   // each as a component of the game's menu stack. One of the two is open at a time; "layer" below
+   // means that one.
    public class PluginSettings extends Sprite
    {
 
@@ -28,6 +32,19 @@ package
 
       private var window:PluginSettingsWindow;
 
+      private var credits:XScalCredits;
+
+      // The open window or credits, null when neither is open.
+      private var layer:* = null;
+
+      private var input:KeyInput;
+
+      // Starts true, so an X held when the menu loads does not open the credits.
+      private var creditsKeyHeld:Boolean = true;
+
+      // Children of root1 that the credits hid, shown again when they close.
+      private var hiddenByCredits:Array = [];
+
       // The active component while the game's Back runs: Back activates the previous component in its
       // history, and this one keeps the main list out of that step.
       private var backstop:MenuComponent;
@@ -39,8 +56,6 @@ package
       private var frameCount:int = 0;
 
       private var published:Boolean = false;
-
-      private var windowOpen:Boolean = false;
 
       private var activatingBackstop:Boolean = false;
 
@@ -54,7 +69,7 @@ package
 
       private var lastEscapeAt:int = -100000;
 
-      private var backHint:* = null;
+      private var hintsAdded:Array = [];
 
       public function PluginSettings()
       {
@@ -68,15 +83,35 @@ package
          this.window.writeOption = this.writeOption;
          this.window.onEscape = this.onEscapePressed;
          this.addChild(this.window);
-         this.mainMenu = new MainMenuLink(this.openWindow);
+         this.input = new KeyInput(this);
+         this.credits = new XScalCredits();
+         this.credits.onEscape = this.onEscapePressed;
+         this.credits.input = this.input;
+         this.credits.addEventListener(XScalCredits.FINISHED,this.onCreditsFinished);
+         this.addChild(this.credits);
+         this.mainMenu = new MainMenuLink(this.openWindow,this.openCredits);
          this.mainMenu.setEntryText(Texts.get("entry"));
+         this.mainMenu.setCreditsHintText(Texts.get("credits_hint"));
          this.addEventListener(Event.ENTER_FRAME,this.onEnterFrame);
       }
 
-      // Read by the core module every frame: mainmenu.swf draws the news panel under this window.
+      // Read by the core module every frame: mainmenu.swf draws the news panel under the window and
+      // the credits.
       public function get isWindowOpen() : Boolean
       {
-         return this.windowOpen;
+         return this.layer != null;
+      }
+
+      // Read by the core module every frame: it plays the credits music while this is true.
+      public function get isCreditsOpen() : Boolean
+      {
+         return this.layer === this.credits;
+      }
+
+      // Set by the core module once the SWF has loaded: src/modules/core/credits.txt from the DLL.
+      public function set creditsText(text:String) : void
+      {
+         this.credits.text = text;
       }
 
       // Set by the core module once the SWF has loaded.
@@ -84,6 +119,7 @@ package
       {
          Texts.language = code;
          this.mainMenu.setEntryText(Texts.get("entry"));
+         this.mainMenu.setCreditsHintText(Texts.get("credits_hint"));
       }
 
       private function readPlugins() : Array
@@ -126,11 +162,16 @@ package
                this.mainMenu.update(this.root1);
             }
          }
+         this.readCreditsKey();
+         if(this.layer === this.credits)
+         {
+            this.hideMenuForCredits();
+         }
          if(this.closePending)
          {
             this.advanceClose();
          }
-         else if(this.windowOpen && (this.backPending || !this.window.visible || !this.window.Active))
+         else if(this.layer != null && (this.backPending || !this.layer.visible || !this.layer.Active))
          {
             this.backPending = false;
             this.onBackedOut();
@@ -183,41 +224,157 @@ package
 
       private function openWindow() : void
       {
-         if(this.windowOpen)
+         this.openLayer(this.window);
+      }
+
+      private function openLayer(opened:*) : void
+      {
+         if(this.layer != null)
          {
             return;
          }
-         this.window.visible = true;
-         this.window.prepareToOpen();
+         this.layer = opened;
+         opened.visible = true;
+         opened.prepareToOpen();
          try
          {
             this.activatingBackstop = true;
             this.root1.changeActiveComponent(this.backstop);
             this.activatingBackstop = false;
-            this.root1.changeActiveComponent(this.window);
+            this.root1.changeActiveComponent(opened);
             // The main list stays visible behind a component it does not know.
             this.root1.MainList.visible = false;
-            this.windowOpen = true;
+            if(opened === this.credits)
+            {
+               this.hideMenuForCredits();
+            }
             this.showBackHint();
          }
          catch(failure:Error)
          {
             this.activatingBackstop = false;
-            this.hideWindow();
+            this.hideLayer();
             this.root1.MainList.visible = true;
             this.root1.changeActiveComponent(this.root1.MainList);
          }
+      }
+
+      // X on the keyboard or the pad opens the credits from the main list. On PC the game gives the main
+      // list no action for either: its XButton is R on the keyboard, and pad X only changes the user on
+      // Xbox.
+      private function readCreditsKey() : void
+      {
+         if(!this.input.register())
+         {
+            return;
+         }
+         // Not read while a window is open; the X that is held when it closes counts as held.
+         if(this.layer != null)
+         {
+            this.creditsKeyHeld = true;
+            return;
+         }
+         var down:Boolean = this.input.isKeyDown(KeyInput.KEY_X) || this.input.isPadDown(KeyInput.PAD_X);
+         var pressed:Boolean = down && !this.creditsKeyHeld;
+         this.creditsKeyHeld = down;
+         if(!pressed)
+         {
+            return;
+         }
+         try
+         {
+            var focused:TextField = this.stage != null ? this.stage.focus as TextField : null;
+            if(focused != null && focused.type == TextFieldType.INPUT)
+            {
+               return;
+            }
+         }
+         catch(failure:Error)
+         {
+            return;
+         }
+         this.openCredits();
+      }
+
+      // From X and from a click on the hint.
+      private function openCredits() : void
+      {
+         if(this.layer != null || this.closePending || this.root1 == null)
+         {
+            return;
+         }
+         try
+         {
+            if(this.root1.ActiveComponent !== this.root1.MainList || !this.root1.MainList.visible)
+            {
+               return;
+            }
+         }
+         catch(failure:Error)
+         {
+            return;
+         }
+         this.playSound("UIMenuOK");
+         this.openLayer(this.credits);
+      }
+
+      private function onCreditsFinished(event:Event) : void
+      {
+         if(this.layer === this.credits)
+         {
+            this.requestClose();
+         }
+      }
+
+      // The credits show alone over the menu background. Runs every frame while they are open, because
+      // the game shows some of these objects again on its own updates.
+      private function hideMenuForCredits() : void
+      {
+         try
+         {
+            var own:DisplayObject = this;
+            while(own != null && own.parent !== this.root1)
+            {
+               own = own.parent;
+            }
+            var hintBar:* = this.root1.ButtonHintBar_mc;
+            var count:int = int(this.root1.numChildren);
+            for(var i:int = 0; i < count; i++)
+            {
+               var child:DisplayObject = this.root1.getChildAt(i);
+               if(child === own || child === hintBar || !child.visible)
+               {
+                  continue;
+               }
+               child.visible = false;
+               this.hiddenByCredits.push(child);
+            }
+         }
+         catch(failure:Error)
+         {
+         }
+      }
+
+      // Shows every object the credits hid. The game's change back to the main list sets that list's
+      // visibility itself.
+      private function showMenuAfterCredits() : void
+      {
+         for each(var child:DisplayObject in this.hiddenByCredits)
+         {
+            child.visible = true;
+         }
+         this.hiddenByCredits = [];
       }
 
       // The game's Back made the backstop active. The window is shown again inside that call, so no
       // frame shows the game's menu; onBackedOut decides on the next frame whether it stays.
       private function onBackstopFocused(event:FocusEvent) : void
       {
-         if(this.activatingBackstop || !this.windowOpen || this.closePending)
+         if(this.activatingBackstop || this.layer == null || this.closePending)
          {
             return;
          }
-         this.window.visible = true;
+         this.layer.visible = true;
          this.backPending = true;
       }
 
@@ -226,7 +383,7 @@ package
          if(this.root1.ActiveComponent !== this.backstop)
          {
             // The game left the window by other means, for example closing the whole menu.
-            this.hideWindow();
+            this.hideLayer();
             return;
          }
          if(getTimer() - this.lastEscapeAt <= ESCAPE_SAME_PRESS_MS)
@@ -234,7 +391,7 @@ package
             this.reactivateWindow();
             return;
          }
-         if(this.window.leaveOptions())
+         if(this.layer.leaveOptions())
          {
             this.reactivateWindow();
             return;
@@ -244,8 +401,8 @@ package
 
       private function reactivateWindow() : void
       {
-         this.window.visible = true;
-         this.root1.changeActiveComponent(this.window);
+         this.layer.visible = true;
+         this.root1.changeActiveComponent(this.layer);
          this.root1.MainList.visible = false;
          this.showBackHint();
       }
@@ -253,7 +410,11 @@ package
       private function onEscapePressed() : void
       {
          this.lastEscapeAt = getTimer();
-         if(!this.window.leaveOptions())
+         if(this.layer == null)
+         {
+            return;
+         }
+         if(!this.layer.leaveOptions())
          {
             this.requestClose();
          }
@@ -278,7 +439,7 @@ package
 
       private function advanceClose() : void
       {
-         if(this.window.isEscapeHeld && getTimer() - this.closeRequestedAt < CLOSE_WAIT_MAX_MS)
+         if(this.layer != null && this.layer.isEscapeHeld && getTimer() - this.closeRequestedAt < CLOSE_WAIT_MAX_MS)
          {
             return;
          }
@@ -288,8 +449,9 @@ package
          }
          this.closePending = false;
          var active:* = this.root1.ActiveComponent;
-         this.hideWindow();
-         if(active === this.window || active === this.backstop)
+         var closed:* = this.layer;
+         this.hideLayer();
+         if((closed != null && active === closed) || active === this.backstop)
          {
             try
             {
@@ -303,30 +465,42 @@ package
          }
       }
 
-      private function hideWindow() : void
+      private function hideLayer() : void
       {
-         this.windowOpen = false;
+         var hidden:* = this.layer;
+         this.layer = null;
          this.closePending = false;
          this.backPending = false;
-         this.window.visible = false;
          this.backstop.visible = false;
-         this.window.releaseEscapeListeners();
+         if(hidden === this.credits)
+         {
+            this.showMenuAfterCredits();
+         }
+         if(hidden != null)
+         {
+            hidden.visible = false;
+            hidden.releaseEscapeListeners();
+         }
       }
 
-      // The game's own hint bar, with the game's button texts and key glyphs.
+      // The game's own hint bar, with the game's button texts and key glyphs. The credits get only Back,
+      // like the game's credits.
       private function showBackHint() : void
       {
          try
          {
-            if(this.backHint == null)
+            if(this.hintsAdded.indexOf(this.layer) < 0)
             {
                var hintClass:Class = getDefinitionByName("Shared.AS3.BSButtonHintData") as Class;
-               this.backHint = new hintClass("$BACK","Tab","PSN_B","Xenon_B",1,this.onBackHintClicked);
-               this.window["buttonHintBarTarget_Inspectable"] = this.root1.ButtonHintBar_mc;
-               this.window["AddButtonHintData"](this.backHint);
-               this.window["AddButtonHintData"](new hintClass("$ACCEPT","Enter","PSN_A","Xenon_A",1,this.window.acceptSelection));
+               this.layer["buttonHintBarTarget_Inspectable"] = this.root1.ButtonHintBar_mc;
+               this.layer["AddButtonHintData"](new hintClass("$BACK","Tab","PSN_B","Xenon_B",1,this.onBackHintClicked));
+               if(this.layer === this.window)
+               {
+                  this.layer["AddButtonHintData"](new hintClass("$ACCEPT","Enter","PSN_A","Xenon_A",1,this.window.acceptSelection));
+               }
+               this.hintsAdded.push(this.layer);
             }
-            this.window["connectButtonBar"]();
+            this.layer["connectButtonBar"]();
          }
          catch(failure:Error)
          {
@@ -335,7 +509,7 @@ package
 
       private function onBackHintClicked() : void
       {
-         if(!this.window.leaveOptions())
+         if(this.layer != null && !this.layer.leaveOptions())
          {
             this.requestClose();
          }
