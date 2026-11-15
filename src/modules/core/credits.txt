@@ -131,6 +131,10 @@ DCHoaxer
 LEGAL
 xScal is an unofficial modification. It is not made, endorsed or supported by
 Bethesda Softworks LLC, ZeniMax Media Inc. or Microsoft Corporation.
+xScal is a client-side user interface extension and plugin loader. It does not disable, bypass or
+change the game's anti-cheat or integrity checks, and it is not made to give any player an
+advantage over others. Plugins that bypass anti-cheat or integrity checks or give an advantage
+over other players are prohibited. Plugins by other authors are the responsibility of their authors.
 Fallout(R) 76 (C) Bethesda Softworks LLC, a ZeniMax Media company. Bethesda, Bethesda Softworks,
 Bethesda Game Studios, ZeniMax, Pip-Boy, Vault-Tec and related logos are registered trademarks or
 trademarks of ZeniMax Media Inc. in the U.S. and/or other countries. Fallout, Vault Boy and related
