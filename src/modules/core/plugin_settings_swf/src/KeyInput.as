@@ -25,7 +25,9 @@ package
 
       private static const KEYS:Array = [KEY_ESCAPE,KEY_UP,KEY_DOWN,KEY_X];
 
-      private static const PAD_BUTTONS:uint = PAD_DPAD_UP | PAD_DPAD_DOWN | PAD_X;
+      // xScal registers a pad mask as a whole and AreGamepadButtonsPressed only answers for a
+      // registered mask, so each button that isPadDown checks is registered on its own.
+      private static const PAD_BUTTONS:Array = [PAD_DPAD_UP,PAD_DPAD_DOWN,PAD_X];
 
       // The object that holds __SFCodeObj.
       private var owner:Object;
@@ -56,8 +58,15 @@ package
                return false;
             }
          }
-         this.registered = this.call("Input.RegisterGamepadButtons",PAD_BUTTONS) === true;
-         return this.registered;
+         for each(var buttons:uint in PAD_BUTTONS)
+         {
+            if(this.call("Input.RegisterGamepadButtons",buttons) !== true)
+            {
+               return false;
+            }
+         }
+         this.registered = true;
+         return true;
       }
 
       public function isKeyDown(key:uint) : Boolean
