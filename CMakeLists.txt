@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(xscal LANGUAGES C CXX ASM_MASM)
+project(xscal LANGUAGES C CXX ASM_MASM RC)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "xscal requires a Windows x64 toolchain")
@@ -190,6 +190,21 @@ add_custom_target(xscal_build_info ALL
     BYPRODUCTS "${XSCAL_BUILD_INFO_HEADER}" "${XSCAL_CREDITS_HEADER}" "${XSCAL_SETTINGS_SWF_BYTES}"
     VERBATIM)
 
+# The version resource takes its numbers from kXScalVersion, so config.h stays
+# the only place the version is written. Editing config.h reruns this step.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/config/config.h")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/src/config/config.h" XSCAL_VERSION_LINE
+    REGEX "kXScalVersion\\{")
+if(NOT XSCAL_VERSION_LINE MATCHES "kXScalVersion\\{([0-9]+), *([0-9]+), *([0-9]+)\\}")
+    message(FATAL_ERROR "kXScalVersion not found in src/config/config.h")
+endif()
+set(XSCAL_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(XSCAL_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(XSCAL_VERSION_PATCH "${CMAKE_MATCH_3}")
+set(XSCAL_VERSION "${XSCAL_VERSION_MAJOR}.${XSCAL_VERSION_MINOR}.${XSCAL_VERSION_PATCH}")
+configure_file(src/dxgi_version.rc.in "${XSCAL_BUILD_INFO_DIR}/dxgi_version.rc" @ONLY)
+
 add_library(dxgi SHARED
     ${XSCAL_CORE_SOURCES}
     src/plugins/root_keys.cpp
@@ -198,6 +213,7 @@ add_library(dxgi SHARED
     src/dxgi_proxy.cpp
     src/dxgi_proxy.asm
     src/dxgi_proxy.def
+    "${XSCAL_BUILD_INFO_DIR}/dxgi_version.rc"
 )
 
 target_compile_features(dxgi PRIVATE cxx_std_20)

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -75,6 +76,13 @@ bool startupChecked{};
 bool hasCandidates{};
 unsigned int hookedImports{};
 DWORD startupError{};
+constexpr DWORD kStartupWaitLimitMs = 30000;
+using InitTermFunction = int (__cdecl*)(int (__cdecl**)(), int (__cdecl**)());
+// The next three are set by InstallStartupWait.
+InitTermFunction originalInitTermE{};
+DWORD gameMainThreadId{};
+HANDLE pluginsLoadedEvent{};
+std::atomic<bool> startupWaitDone{};
 thread_local bool inPluginCall{};
 uint32_t targetKind = XSCAL_TARGET_UNKNOWN;
 const XScalAddressLibraryV1* addressLibrary{};
@@ -647,15 +655,17 @@ const char* ImageString(BYTE* image, std::size_t imageSize, DWORD offset) noexce
     return std::memchr(text, '\0', imageSize - offset) ? text : nullptr;
 }
 
+// Returns false when the slot was already patched, is empty, or could not be
+// made writable.
 template<class Function>
-void PatchImport(IMAGE_THUNK_DATA64& thunk, Function replacement,
+bool PatchImport(IMAGE_THUNK_DATA64& thunk, Function replacement,
                  Function& original) noexcept {
-    if (original != nullptr || thunk.u1.Function == 0) return;
+    if (original != nullptr || thunk.u1.Function == 0) return false;
     DWORD previousProtection{};
     if (!::VirtualProtect(&thunk.u1.Function, sizeof(thunk.u1.Function),
                           PAGE_READWRITE, &previousProtection)) {
         startupError = ::GetLastError();
-        return;
+        return false;
     }
     original = reinterpret_cast<Function>(thunk.u1.Function);
     ::InterlockedExchangePointer(reinterpret_cast<void**>(&thunk.u1.Function),
@@ -665,10 +675,14 @@ void PatchImport(IMAGE_THUNK_DATA64& thunk, Function replacement,
                           previousProtection, &ignored)) {
         startupError = ::GetLastError();
     }
-    ++hookedImports;
+    // ++hookedImports;
+    return true;
 }
 
-void PatchCreationImports(HMODULE executable) noexcept {
+// Calls visit(functionName, slot) for each import the executable takes by
+// name from the DLL named dllName.
+template<class Visit>
+void ForEachNamedImport(HMODULE executable, const char* dllName, Visit&& visit) noexcept {
     auto* image = reinterpret_cast<BYTE*>(executable);
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0) return;
@@ -684,7 +698,7 @@ void PatchCreationImports(HMODULE executable) noexcept {
         const auto& entry = imports[index];
         if (!entry.Name) break;
         const char* name = ImageString(image, imageSize, entry.Name);
-        if (!name || ::_stricmp(name, "d3d11.dll") != 0 ||
+        if (!name || ::_stricmp(name, dllName) != 0 ||
             !entry.OriginalFirstThunk || !entry.FirstThunk) continue;
         std::size_t nameOffset = entry.OriginalFirstThunk;
         std::size_t slotOffset = entry.FirstThunk;
@@ -698,15 +712,52 @@ void PatchCreationImports(HMODULE executable) noexcept {
                 Contains(imageSize, named->u1.AddressOfData, sizeof(IMAGE_IMPORT_BY_NAME))) {
                 const char* function = ImageString(image, imageSize,
                     static_cast<DWORD>(named->u1.AddressOfData + offsetof(IMAGE_IMPORT_BY_NAME, Name)));
-                if (function && std::strcmp(function, "D3D11CreateDevice") == 0)
-                    PatchImport(*slot, &CreateDevice, originalCreateDevice);
-                else if (function && std::strcmp(function, "D3D11CreateDeviceAndSwapChain") == 0)
-                    PatchImport(*slot, &CreateDeviceAndSwapChain, originalCreateDeviceAndSwapChain);
+                // if (function && std::strcmp(function, "D3D11CreateDevice") == 0)
+                //     PatchImport(*slot, &CreateDevice, originalCreateDevice);
+                // else if (function && std::strcmp(function, "D3D11CreateDeviceAndSwapChain") == 0)
+                //     PatchImport(*slot, &CreateDeviceAndSwapChain, originalCreateDeviceAndSwapChain);
+                if (function) visit(function, *slot);
             }
             nameOffset += sizeof(IMAGE_THUNK_DATA64);
             slotOffset += sizeof(IMAGE_THUNK_DATA64);
         }
     }
+}
+
+void PatchCreationImports(HMODULE executable) noexcept {
+    ForEachNamedImport(executable, "d3d11.dll", [](const char* function, IMAGE_THUNK_DATA64& slot) {
+        if (std::strcmp(function, "D3D11CreateDevice") == 0 &&
+            PatchImport(slot, &CreateDevice, originalCreateDevice))
+            ++hookedImports;
+        else if (std::strcmp(function, "D3D11CreateDeviceAndSwapChain") == 0 &&
+            PatchImport(slot, &CreateDeviceAndSwapChain, originalCreateDeviceAndSwapChain))
+            ++hookedImports;
+    });
+}
+
+// Holds the game's main thread until plugin loading has finished, at most
+// kStartupWaitLimitMs. Fallout76.exe's CRT startup calls _initterm_e once,
+// before any C or C++ static initializer runs. Plugins and xScal's own bridge
+// write vtable slots into the exe while loading; the game freezes or exits
+// when those writes land after its static initializers have run, which happens
+// when plugins load slowly on a cold start. Waiting before WinMain was too
+// late.
+int __cdecl InitTermEAfterPlugins(int (__cdecl** first)(), int (__cdecl** last)()) {
+    if (::GetCurrentThreadId() == gameMainThreadId && !startupWaitDone.exchange(true)) {
+        const ULONGLONG start = ::GetTickCount64();
+        const DWORD result = ::WaitForSingleObject(pluginsLoadedEvent, kStartupWaitLimitMs);
+        const unsigned long long waitedMs = ::GetTickCount64() - start;
+        if (result == WAIT_OBJECT_0)
+            DiagnosticLogFormatImmediate(
+                "xScal plugins: the game's main thread waited %llu ms for plugins before its static initializers",
+                waitedMs);
+        else
+            DiagnosticLogFormatImmediate(
+                "xScal plugins: the game's main thread stopped waiting after %llu ms; "
+                "plugins that are still loading write into the game late",
+                waitedMs);
+    }
+    return originalInitTermE(first, last);
 }
 
 // Read-only file handle that closes itself. The plugin DLL stays open without
@@ -1401,6 +1452,10 @@ BOOL CALLBACK LoadModules(PINIT_ONCE, PVOID, PVOID*) noexcept {
                 "xScal plugin startup: Windows error %lu", startupError);
         DiagnosticLogFormatImmediate(
             "xScal plugins: intercepted %u D3D11 creation imports", hookedImports);
+        if (pluginsLoadedEvent && !originalInitTermE)
+            DiagnosticLogImmediate(
+                "xScal plugins: the game does not import _initterm_e; "
+                "plugins load while the game starts");
         const std::wstring directory(searchPath.c_str(), searchPath.length - 5);
         std::vector<std::wstring> paths;
         WIN32_FIND_DATAW file{};
@@ -1458,6 +1513,14 @@ BOOL CALLBACK LoadModules(PINIT_ONCE, PVOID, PVOID*) noexcept {
     return TRUE;
 }
 
+// Releases a main thread held in InitTermEAfterPlugins on every return
+// path of LoadModules.
+BOOL CALLBACK LoadModulesOnce(PINIT_ONCE initOnce, PVOID parameter, PVOID* context) noexcept {
+    const BOOL result = LoadModules(initOnce, parameter, context);
+    if (pluginsLoadedEvent) (void)::SetEvent(pluginsLoadedEvent);
+    return result;
+}
+
 }
 
 void InstallCreationHooks(HMODULE executable, bool (*initialize)() noexcept) noexcept {
@@ -1483,6 +1546,27 @@ void InstallCreationHooks(HMODULE executable, bool (*initialize)() noexcept) noe
         return;
     }
     PatchCreationImports(executable);
+}
+
+void InstallStartupWait(HMODULE executable) noexcept {
+    if (!executable || originalInitTermE) return;
+    pluginsLoadedEvent = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!pluginsLoadedEvent) {
+        startupError = ::GetLastError();
+        return;
+    }
+    HMODULE pinned{};
+    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                              reinterpret_cast<LPCWSTR>(&InstallStartupWait), &pinned)) {
+        startupError = ::GetLastError();
+        return;
+    }
+    gameMainThreadId = ::GetCurrentThreadId();
+    ForEachNamedImport(executable, "api-ms-win-crt-runtime-l1-1-0.dll",
+        [](const char* function, IMAGE_THUNK_DATA64& slot) {
+            if (std::strcmp(function, "_initterm_e") == 0)
+                (void)PatchImport(slot, &InitTermEAfterPlugins, originalInitTermE);
+        });
 }
 
 void SetTargetKind(TargetKind kind) noexcept {
@@ -1512,7 +1596,8 @@ void SetScaleformMovieInterface(
 void Load() noexcept {
     // Query/load may create a device through the game's imports on this thread.
     // Such calls use the original entry points instead of reentering InitOnce.
-    if (!inPluginCall) (void)::InitOnceExecuteOnce(&loadOnce, &LoadModules, nullptr, nullptr);
+    // if (!inPluginCall) (void)::InitOnceExecuteOnce(&loadOnce, &LoadModules, nullptr, nullptr);
+    if (!inPluginCall) (void)::InitOnceExecuteOnce(&loadOnce, &LoadModulesOnce, nullptr, nullptr);
 }
 
 bool DispatchScaleform(

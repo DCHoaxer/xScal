@@ -63,6 +63,9 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) noexcept 
         (void)::DisableThreadLibraryCalls(module);
         HANDLE thread = ::CreateThread(nullptr, 0, &InitializePlugins, nullptr, 0, nullptr);
         if (thread != nullptr) {
+            // The thread cannot run InitializePlugins before this DllMain
+            // returns: starting it needs the loader lock this call holds.
+            sf::plugins::InstallStartupWait(::GetModuleHandleW(nullptr));
             (void)::CloseHandle(thread);
         }
     }

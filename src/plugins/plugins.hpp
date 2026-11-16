@@ -34,6 +34,12 @@ void SetScaleformMovieInterface(
 void InstallCreationHooks(
     HMODULE executable, bool (*initializeHost)() noexcept = nullptr) noexcept;
 
+// Called from DLL_PROCESS_ATTACH after the plugin loading thread was created.
+// Replaces the executable's _initterm_e import so the first call on this
+// thread waits until Load() has finished, at most 30 seconds. The CRT startup
+// of Fallout76.exe calls it once, before any static initializer.
+void InstallStartupWait(HMODULE executable) noexcept;
+
 // Called by the initialization worker and creation hooks; completes only once.
 // Accepted DLLs and their callbacks remain resident until process exit.
 void Load() noexcept;

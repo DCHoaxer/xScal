@@ -1,0 +1,37 @@
+// Version resource of dxgi.dll, shown in the file's Properties > Details.
+// CMake fills in the version from kXScalVersion in src/config/config.h.
+// The numbers below are the winver.h values; llvm-rc in the cross build has
+// no Windows SDK include path.
+//   1        VS_VERSION_INFO
+//   0x3F     VS_FFI_FILEFLAGSMASK
+//   0x40004  VOS_NT_WINDOWS32
+//   0x2      VFT_DLL
+
+1 VERSIONINFO
+ FILEVERSION @XSCAL_VERSION_MAJOR@,@XSCAL_VERSION_MINOR@,@XSCAL_VERSION_PATCH@,0
+ PRODUCTVERSION @XSCAL_VERSION_MAJOR@,@XSCAL_VERSION_MINOR@,@XSCAL_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3F
+ FILEFLAGS 0x0
+ FILEOS 0x40004
+ FILETYPE 0x2
+ FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "DCHoaxer"
+            VALUE "FileDescription", "xScal Scaleform extender and plugin loader for Fallout 76"
+            VALUE "FileVersion", "@XSCAL_VERSION@"
+            VALUE "InternalName", "xScal"
+            VALUE "LegalCopyright", "Copyright (C) DCHoaxer. Licensed under the GNU GPL version 3."
+            VALUE "OriginalFilename", "dxgi.dll"
+            VALUE "ProductName", "xScal"
+            VALUE "ProductVersion", "@XSCAL_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
